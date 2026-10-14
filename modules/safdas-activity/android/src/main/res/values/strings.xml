@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="safdas_widget_label">SAFDAŞ</string>
+  <string name="safdas_widget_description">Sıradaki namaz ve günlük vakitler</string>
+</resources>

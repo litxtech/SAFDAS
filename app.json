@@ -9,30 +9,36 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/logo-mark.png",
       "resizeMode": "contain",
       "backgroundColor": "#191B24"
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.litxtech.safdas",
+      "bundleIdentifier": "com.litxtech.namazim",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Namaz vakitleri ve kıble yönü için bulunduğunuz konum kullanılır. Konum izni vermezseniz şehri elle seçebilirsiniz.",
         "NSPhotoLibraryUsageDescription": "Profil, gönderi ve kanıt görselleri için fotoğraf kitaplığınıza erişilir.",
         "NSCameraUsageDescription": "Profil ve gönderi fotoğrafları için kamera kullanılır.",
-        "NSMicrophoneUsageDescription": "Sesli mesaj ve canlı odalar için mikrofon kullanılır.",
+        "NSMicrophoneUsageDescription": "Sesli mesaj ve canlı odalar için mikrofon kullanılır. Mikrofon, siz istemeden ve uygulama arka plandayken açılmaz.",
+        "NSSupportsLiveActivities": true,
         "UIBackgroundModes": [
           "audio",
           "remote-notification"
         ],
         "ExpoLocalization_supportsRTL": true
+      },
+      "entitlements": {
+        "com.apple.security.application-groups": [
+          "group.com.litxtech.namazim"
+        ]
       }
     },
     "android": {
-      "package": "com.litxtech.safdas",
+      "package": "com.litxtech.namazim",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#7543A8"
+        "backgroundColor": "#FFFFFF"
       },
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
@@ -41,7 +47,10 @@
         "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.VIBRATE",
         "android.permission.SCHEDULE_EXACT_ALARM",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
       ]
     },
     "plugins": [
@@ -69,7 +78,16 @@
           "cameraPermission": "Fotoğraf çekmek için kamera izni gerekir."
         }
       ],
-      "expo-apple-authentication"
+      "expo-apple-authentication",
+      "@bacons/apple-targets",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Sesli mesaj ve canlı odalar için mikrofon kullanılır. Mikrofon, siz istemeden ve uygulama arka plandayken açılmaz.",
+          "recordAudioAndroid": true,
+          "enableBackgroundRecording": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false

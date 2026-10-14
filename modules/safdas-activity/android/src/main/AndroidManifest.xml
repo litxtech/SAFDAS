@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <receiver
+      android:name="expo.modules.safdasactivity.PrayerWidgetProvider"
+      android:exported="true"
+      android:label="@string/safdas_widget_label">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+        <action android:name="com.litxtech.namazim.WIDGET_REFRESH" />
+      </intent-filter>
+      <meta-data
+        android:name="android.appwidget.provider"
+        android:resource="@xml/safdas_prayer_widget_info" />
+    </receiver>
+  </application>
+</manifest>

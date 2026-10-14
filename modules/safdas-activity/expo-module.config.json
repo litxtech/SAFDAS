@@ -1,0 +1,10 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["SafdasActivityModule"],
+    "podspecPath": "ios/SafdasActivity.podspec"
+  },
+  "android": {
+    "modules": ["expo.modules.safdasactivity.SafdasActivityModule"]
+  }
+}

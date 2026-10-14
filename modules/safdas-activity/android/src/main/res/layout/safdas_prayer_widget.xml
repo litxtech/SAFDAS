@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/widget_root"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:background="#191B24"
+  android:orientation="vertical"
+  android:padding="12dp">
+
+  <TextView
+    android:id="@+id/widget_brand"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:text="SAFDAŞ"
+    android:textColor="#A65CD6"
+    android:textSize="12sp"
+    android:textStyle="bold" />
+
+  <TextView
+    android:id="@+id/widget_city"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:textColor="#F7F7FA"
+    android:textSize="12sp" />
+
+  <TextView
+    android:id="@+id/widget_next"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingTop="6dp"
+    android:textColor="#F7F7FA"
+    android:textSize="20sp"
+    android:textStyle="bold" />
+
+  <TextView
+    android:id="@+id/widget_time"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:textColor="#A65CD6"
+    android:textSize="16sp" />
+
+  <TextView
+    android:id="@+id/widget_remaining"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:textColor="#F7F7FA"
+    android:textSize="12sp" />
+
+  <TextView
+    android:id="@+id/widget_times"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingTop="8dp"
+    android:textColor="#F7F7FA"
+    android:textSize="11sp" />
+</LinearLayout>
