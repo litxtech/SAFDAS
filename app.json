@@ -1,0 +1,86 @@
+{
+  "expo": {
+    "name": "SAFDAS",
+    "slug": "safdas",
+    "scheme": "safdas",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#191B24"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.litxtech.safdas",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Namaz vakitleri ve kıble yönü için bulunduğunuz konum kullanılır. Konum izni vermezseniz şehri elle seçebilirsiniz.",
+        "NSPhotoLibraryUsageDescription": "Profil, gönderi ve kanıt görselleri için fotoğraf kitaplığınıza erişilir.",
+        "NSCameraUsageDescription": "Profil ve gönderi fotoğrafları için kamera kullanılır.",
+        "NSMicrophoneUsageDescription": "Sesli mesaj ve canlı odalar için mikrofon kullanılır.",
+        "UIBackgroundModes": [
+          "audio",
+          "remote-notification"
+        ],
+        "ExpoLocalization_supportsRTL": true
+      }
+    },
+    "android": {
+      "package": "com.litxtech.safdas",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#7543A8"
+      },
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.VIBRATE",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-font",
+      "expo-localization",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Namaz vakitleri ve kıble için konumunuz kullanılır."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "sounds": [],
+          "mode": "production"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Fotoğraf paylaşmak ve profil görseli seçmek için izin gerekir.",
+          "cameraPermission": "Fotoğraf çekmek için kamera izni gerekir."
+        }
+      ],
+      "expo-apple-authentication"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "extra": {
+      "supportsRTL": true,
+      "router": {},
+      "eas": {
+        "projectId": "921086e6-1f5e-434f-b391-a6f3450ed46f"
+      }
+    },
+    "owner": "safdas"
+  }
+}
