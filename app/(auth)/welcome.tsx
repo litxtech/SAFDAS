@@ -1,87 +1,155 @@
-import { useEffect } from 'react';
-import { Platform, Text, View } from 'react-native';
-import * as AppleAuthentication from 'expo-apple-authentication';
-import * as Crypto from 'expo-crypto';
-import * as Google from 'expo-auth-session/providers/google';
+import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
+import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
-import * as WebBrowser from 'expo-web-browser';
-import { Screen } from '@/components/layout/Screen';
-import { AppButton } from '@/components/ui/AppButton';
+import Animated, { useReducedMotion } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { openPolicy } from '@/components/legal/PolicyLinks';
+import {
+  SpotBackdrop,
+  SpotButton,
+  SpotGlass,
+  spot,
+  spotEnter,
+  spotFade,
+} from '@/components/auth/SpotAuth';
 import { useT } from '@/i18n';
-import { requireSupabase } from '@/lib/supabase';
-import { useToastStore } from '@/stores/toastStore';
 import { useTheme } from '@/theme/ThemeProvider';
 
-WebBrowser.maybeCompleteAuthSession();
+const LOBBY = {
+  title: 'İbadetin, Huzurun ve Paylaşımın Buluştuğu Yer',
+  body: 'Namaz, Kur’an ve dua — aynı safta, aynı gönülde.',
+  createAccount: 'Hesap Oluştur',
+  privacy: 'Gizlilik',
+  terms: 'Koşullar',
+  brand: 'SAFDAŞ',
+} as const;
 
 export default function WelcomeScreen() {
-  const { colors } = useTheme();
+  const { reduceMotion: themeReduce } = useTheme();
+  const systemReduce = useReducedMotion();
+  const reduceMotion = themeReduce || Boolean(systemReduce);
   const t = useT();
-  const show = useToastStore((state) => state.show);
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
-    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
-    androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
-  });
+  const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  const compact = windowHeight < 720;
 
-  useEffect(() => {
-    const idToken = response?.type === 'success' ? response.authentication?.idToken : undefined;
-    if (!idToken) return;
-    void requireSupabase()
-      .auth.signInWithIdToken({ provider: 'google', token: idToken })
-      .then(({ error }) => {
-        if (error) show(error.message, 'error');
-        else router.replace('/');
-      });
-  }, [response, show]);
-
-  async function continueWithApple() {
-    try {
-      const rawNonce = Crypto.randomUUID();
-      const hashed = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, rawNonce);
-      const credential = await AppleAuthentication.signInAsync({
-        requestedScopes: [AppleAuthentication.AppleAuthenticationScope.FULL_NAME, AppleAuthentication.AppleAuthenticationScope.EMAIL],
-        nonce: hashed,
-      });
-      if (!credential.identityToken) {
-        show(t('appleTokenMissing'), 'error');
-        return;
-      }
-      const { error } = await requireSupabase().auth.signInWithIdToken({
-        provider: 'apple',
-        token: credential.identityToken,
-        nonce: rawNonce,
-      });
-      if (error) show(error.message, 'error');
-      else router.replace('/');
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('ERR_REQUEST_CANCELED')) return;
-      show(error instanceof Error ? error.message : t('appleSignInFailed'), 'error');
-    }
+  function press(action: () => void) {
+    if (!reduceMotion) void Haptics.selectionAsync();
+    action();
   }
 
   return (
-    <Screen>
-      <View style={{ flex: 1, justifyContent: 'flex-end', gap: 16, paddingBottom: 12 }}>
-        <Text style={{ color: colors.primary, fontWeight: '800', letterSpacing: 2 }}>{t('brand')}</Text>
-        <Text style={{ color: colors.text, fontSize: 40, fontWeight: '700', letterSpacing: -1 }}>{t('slogan')}</Text>
-        <Text style={{ color: colors.textSecondary, fontSize: 16, lineHeight: 24 }}>{t('tagline')}</Text>
-        <AppButton label={t('login')} onPress={() => router.push('/(auth)/login')} />
-        <AppButton label={t('register')} variant="secondary" onPress={() => router.push('/(auth)/register')} />
-        {Platform.OS === 'ios' ? <AppButton label={t('apple')} variant="secondary" onPress={() => void continueWithApple()} /> : null}
-        <AppButton
-          label={t('google')}
-          variant="ghost"
-          disabled={!request}
-          onPress={() => {
-            if (!process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID) {
-              show(t('googleClientMissing'), 'error');
-              return;
-            }
-            void promptAsync();
-          }}
-        />
+    <View style={styles.root}>
+      <StatusBar style="light" />
+      <SpotBackdrop />
+      <View
+        style={[
+          styles.stage,
+          {
+            paddingTop: insets.top + (compact ? 16 : 28),
+            paddingBottom: Math.max(insets.bottom, 16) + 10,
+          },
+        ]}
+      >
+        <Animated.View
+          entering={spotFade(60, reduceMotion)}
+          style={[styles.brandRow, { top: insets.top + (compact ? 16 : 28) }]}
+        >
+          <Text style={styles.brand} accessibilityRole="header">
+            {LOBBY.brand}
+          </Text>
+        </Animated.View>
+
+        <View style={styles.spacer} />
+
+        <Animated.View entering={spotEnter(160, reduceMotion)} style={styles.copy}>
+          <Text style={[styles.title, compact && { fontSize: 34, lineHeight: 40 }]}>{LOBBY.title}</Text>
+          <Text style={styles.body}>{LOBBY.body}</Text>
+        </Animated.View>
+
+        <Animated.View entering={spotEnter(280, reduceMotion)}>
+          <SpotGlass strong style={styles.panel}>
+            <SpotButton label={t('login')} onPress={() => press(() => router.push('/(auth)/login'))} />
+            <SpotButton
+              label={LOBBY.createAccount}
+              variant="glass"
+              onPress={() => press(() => router.push('/(auth)/register'))}
+            />
+            <View style={styles.legalRow}>
+              <Pressable accessibilityRole="link" onPress={() => openPolicy('privacy')} hitSlop={8} style={styles.legalHit}>
+                <Text style={styles.legal}>{LOBBY.privacy}</Text>
+              </Pressable>
+              <Text style={styles.legalDot}>·</Text>
+              <Pressable accessibilityRole="link" onPress={() => openPolicy('terms')} hitSlop={8} style={styles.legalHit}>
+                <Text style={styles.legal}>{LOBBY.terms}</Text>
+              </Pressable>
+            </View>
+          </SpotGlass>
+        </Animated.View>
       </View>
-    </Screen>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: '#050505' },
+  stage: {
+    flex: 1,
+    paddingHorizontal: 22,
+    justifyContent: 'flex-end',
+  },
+  brandRow: {
+    position: 'absolute',
+    top: 0,
+    left: 22,
+    right: 22,
+    alignItems: 'center',
+  },
+  brand: {
+    color: spot.ink,
+    fontSize: 28,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    textShadowColor: 'rgba(0,0,0,0.45)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 10,
+  },
+  spacer: { flex: 1, minHeight: 120 },
+  copy: {
+    marginBottom: 18,
+    gap: 10,
+    paddingHorizontal: 2,
+  },
+  title: {
+    color: spot.ink,
+    fontSize: 40,
+    fontWeight: '800',
+    letterSpacing: -1.1,
+    lineHeight: 46,
+    textShadowColor: 'rgba(0,0,0,0.55)',
+    textShadowOffset: { width: 0, height: 3 },
+    textShadowRadius: 14,
+  },
+  body: {
+    color: spot.muted,
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '500',
+    maxWidth: 340,
+  },
+  panel: {
+    marginBottom: 4,
+  },
+  legalRow: {
+    marginTop: 2,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  legalHit: { minHeight: 32, justifyContent: 'center' },
+  legal: { color: spot.dim, fontSize: 12, fontWeight: '600' },
+  legalDot: { color: spot.dim, fontSize: 12 },
+});
