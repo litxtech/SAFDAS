@@ -1,15 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FlatList, Pressable, Text, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Cover, ListenBack, PlayFab, RoundIcon, TrackRow, coverFor, ink } from '@/components/listen/chrome';
+import { AutoNextSurahToggle } from '@/components/quran/AutoNextSurahToggle';
 import { ContinueSpanPicker } from '@/components/quran/ContinueSpanPicker';
 import { ReciterPicker } from '@/components/quran/ReciterPicker';
 import { useI18nStore, useT } from '@/i18n';
 import { fetchSurah, fetchSurahList, surahFacts, type Ayah } from '@/services/quran';
+import { goQuranHome, openSurah } from '@/services/quran/nav';
 import { playSurahAyah, toggleQuranPlayback, useQuranPlayer } from '@/services/quran/playback';
 import { useReadingStore } from '@/stores/readingStore';
 
@@ -75,8 +77,12 @@ export default function SurahScreen() {
   useEffect(() => {
     if (!followed.current || !player.surahNumber || player.surahNumber === number) return;
     followed.current = false;
-    router.replace({ pathname: '/quran/[surah]', params: { surah: String(player.surahNumber), ayah: String(player.ayahInSurah ?? 1) } });
+    openSurah(player.surahNumber, player.ayahInSurah ?? 1, { replace: true });
   }, [player.ayahInSurah, player.surahNumber, number]);
+
+  useEffect(() => {
+    jumped.current = false;
+  }, [number]);
 
   useEffect(() => {
     if (jumped.current || !query.data || !Number.isFinite(targetAyah) || targetAyah <= 0) return;
@@ -103,7 +109,18 @@ export default function SurahScreen() {
         }}
         ListHeaderComponent={
           <LinearGradient colors={[pair[0], ink.canvas]} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={{ paddingTop: insets.top + 4, paddingHorizontal: 16, paddingBottom: 12, gap: 14 }}>
-            <ListenBack onPress={() => router.replace('/quran')} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <ListenBack onPress={goQuranHome} />
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t('quranHome')}
+                onPress={goQuranHome}
+                hitSlop={8}
+                style={{ minHeight: 36, paddingHorizontal: 12, borderRadius: 999, backgroundColor: ink.raised, alignItems: 'center', justifyContent: 'center' }}
+              >
+                <Text style={{ color: ink.muted, fontWeight: '700', fontSize: 13 }}>{t('quranHome')}</Text>
+              </Pressable>
+            </View>
             <Cover seed={number} label={summary?.name ?? title} size={196} />
             <View>
               <Text style={{ color: ink.text, fontSize: 28, fontWeight: '800' }}>{title}</Text>
@@ -121,6 +138,7 @@ export default function SurahScreen() {
               </View>
               <PlayFab playing={listening && player.playing} onPress={listen} />
             </View>
+            <AutoNextSurahToggle />
             <ContinueSpanPicker />
             {summary && !summary.bismillahPre ? <Text style={{ color: ink.muted }}>{t('noBismillah')}</Text> : null}
             {query.error ? <Text style={{ color: ink.green }} onPress={() => void query.refetch()}>{t('retryAudio')}</Text> : null}

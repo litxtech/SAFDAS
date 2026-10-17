@@ -20,6 +20,7 @@ import {
   tracksFor,
   type DuaItem,
 } from '@/services/duas';
+import { openPlayer as navigateToPlayer } from '@/services/quran/nav';
 import { useAuthStore } from '@/stores/authStore';
 import { useDuaVoiceStore } from '@/stores/duaVoiceStore';
 import { useToastStore } from '@/stores/toastStore';
@@ -98,7 +99,7 @@ export function DuaBoard({ focus }: { focus?: string }) {
     } else {
       await playQueue(queue, index);
     }
-    if (openPlayer) router.push('/player');
+    if (openPlayer) navigateToPlayer();
   }
 
   async function playAll() {

@@ -114,40 +114,59 @@ export function Transport({
   loading,
   shuffled,
   repeatMode,
+  playbackRate = 1,
   onToggle,
   onPrevious,
   onNext,
   onShuffle,
   onRepeat,
+  onRate,
 }: {
   playing: boolean;
   loading: boolean;
   shuffled: boolean;
   repeatMode: RepeatMode;
+  playbackRate?: number;
   onToggle: () => void;
   onPrevious: () => void;
   onNext: () => void;
   onShuffle: () => void;
   onRepeat: () => void;
+  onRate?: () => void;
 }) {
   const t = useT();
   const repeatOn = repeatMode !== 'off';
+  const rateLabel = playbackRate === 1 ? '1×' : `${playbackRate}×`;
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8 }}>
-      <Pressable accessibilityLabel={t('shuffle')} onPress={onShuffle} hitSlop={8}>
-        <Ionicons name="shuffle" size={24} color={shuffled ? ink.green : ink.muted} />
-      </Pressable>
-      <Pressable accessibilityLabel={t('previousTrack')} onPress={onPrevious} hitSlop={8}>
-        <Ionicons name="play-skip-back" size={30} color={ink.text} />
-      </Pressable>
-      <PlayFab playing={playing || loading} onPress={onToggle} size={64} />
-      <Pressable accessibilityLabel={t('nextTrack')} onPress={onNext} hitSlop={8}>
-        <Ionicons name="play-skip-forward" size={30} color={ink.text} />
-      </Pressable>
-      <Pressable accessibilityLabel={repeatMode === 'one' ? t('repeatOne') : repeatMode === 'all' ? t('repeatAll') : t('repeatOff')} onPress={onRepeat} hitSlop={8} style={{ width: 32, alignItems: 'center' }}>
-        <Ionicons name="repeat" size={24} color={repeatOn ? ink.green : ink.muted} />
-        {repeatMode === 'one' ? <Text style={{ color: ink.green, fontSize: 10, fontWeight: '800', marginTop: -4 }}>1</Text> : null}
-      </Pressable>
+    <View style={{ gap: 10 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8 }}>
+        <Pressable accessibilityLabel={t('shuffle')} onPress={onShuffle} hitSlop={8}>
+          <Ionicons name="shuffle" size={24} color={shuffled ? ink.green : ink.muted} />
+        </Pressable>
+        <Pressable accessibilityLabel={t('previousTrack')} onPress={onPrevious} hitSlop={8}>
+          <Ionicons name="play-skip-back" size={30} color={ink.text} />
+        </Pressable>
+        <PlayFab playing={playing || loading} onPress={onToggle} size={64} />
+        <Pressable accessibilityLabel={t('nextTrack')} onPress={onNext} hitSlop={8}>
+          <Ionicons name="play-skip-forward" size={30} color={ink.text} />
+        </Pressable>
+        <Pressable accessibilityLabel={repeatMode === 'one' ? t('repeatOne') : repeatMode === 'all' ? t('repeatAll') : t('repeatOff')} onPress={onRepeat} hitSlop={8} style={{ width: 32, alignItems: 'center' }}>
+          <Ionicons name="repeat" size={24} color={repeatOn ? ink.green : ink.muted} />
+          {repeatMode === 'one' ? <Text style={{ color: ink.green, fontSize: 10, fontWeight: '800', marginTop: -4 }}>1</Text> : null}
+        </Pressable>
+      </View>
+      {onRate ? (
+        <Pressable
+          accessibilityLabel={t('playbackSpeed')}
+          onPress={onRate}
+          hitSlop={8}
+          style={{ alignSelf: 'center', minHeight: 32, paddingHorizontal: 14, borderRadius: 999, backgroundColor: ink.raised, alignItems: 'center', justifyContent: 'center' }}
+        >
+          <Text style={{ color: playbackRate === 1 ? ink.muted : ink.green, fontWeight: '800', fontSize: 13 }}>
+            {t('playbackSpeed')} {rateLabel}
+          </Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
