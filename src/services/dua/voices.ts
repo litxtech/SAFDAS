@@ -45,9 +45,29 @@ export function getDuaVoice(id: string | null | undefined) {
   return DUA_VOICES.find((voice) => voice.id === id) ?? JUMAH;
 }
 
-/** Known single-ayah duas → global ayah number (islamic.network CDN). */
+/** Known named duas → global ayah number (islamic.network CDN). */
 export const DUA_AYAH_BY_SLUG: Record<string, number> = {
   kursi: 262,
+  'ayat-al-kursi': 262,
+  ayatalkursi: 262,
+  fatiha: 1,
+};
+
+/** Slug fragments → surah number (first ayah used for CDN). */
+const DUA_SURAH_BY_SLUG: Record<string, number> = {
+  fatiha: 1,
+  ikhlas: 112,
+  ihklas: 112,
+  falaq: 113,
+  nas: 114,
+  yasin: 36,
+  'ya-sin': 36,
+  mulk: 67,
+  kahf: 18,
+  rahman: 55,
+  waqiah: 56,
+  sajdah: 32,
+  secde: 32,
 };
 
 const AYAH_REF = /(?:qur'?an|kur'?an|القرآن)?\s*(\d{1,3})\s*[:：]\s*(\d{1,3})/i;
@@ -79,28 +99,66 @@ export function globalAyahNumber(surah: number, ayah: number) {
   return total + ayah;
 }
 
-export function resolveDuaAudioUrl(input: {
+export type DuaAudioResolveInput = {
   voiceId: string;
   openDuaUrl?: string | null;
   audioUrl?: string | null;
   ayahNumber?: number | null;
   slug?: string | null;
   source?: string | null;
-}) {
+  arabic?: string | null;
+  categoryNumber?: string | null;
+};
+
+/** Resolve a global ayah so Quran reciters can swap voices for Qur’anic duas. */
+export function resolveDuaAyahNumber(input: Omit<DuaAudioResolveInput, 'voiceId' | 'openDuaUrl' | 'audioUrl'>) {
+  if (typeof input.ayahNumber === 'number' && input.ayahNumber > 0) return input.ayahNumber;
+
+  const slug = (input.slug ?? '').toLowerCase().replace(/[^a-z0-9-]/g, '');
+  if (slug && DUA_AYAH_BY_SLUG[slug]) return DUA_AYAH_BY_SLUG[slug] ?? null;
+  for (const [key, value] of Object.entries(DUA_AYAH_BY_SLUG)) {
+    if (slug.includes(key)) return value;
+  }
+  for (const [key, surah] of Object.entries(DUA_SURAH_BY_SLUG)) {
+    if (slug === key || slug.includes(key)) {
+      const first = globalAyahNumber(surah, 1);
+      if (first) return first;
+    }
+  }
+
+  const surahCat = input.categoryNumber?.match(/^surah:(\d{1,3})$/i);
+  if (surahCat) {
+    const first = globalAyahNumber(Number(surahCat[1]), 1);
+    if (first) return first;
+  }
+
+  const ref = parseAyahRef(input.source);
+  if (ref) {
+    const global = globalAyahNumber(ref.surah, ref.ayah);
+    if (global) return global;
+  }
+
+  return null;
+}
+
+export function resolveDuaAudioUrl(input: DuaAudioResolveInput) {
   const voice = getDuaVoice(input.voiceId);
-  let ayah = input.ayahNumber ?? null;
-  if (!ayah && input.slug && DUA_AYAH_BY_SLUG[input.slug]) ayah = DUA_AYAH_BY_SLUG[input.slug] ?? null;
-  if (!ayah) {
-    const ref = parseAyahRef(input.source);
-    if (ref) ayah = globalAyahNumber(ref.surah, ref.ayah);
-  }
-
-  if (voice.kind === 'quran' && ayah) {
-    return audioUrl(ayah, voice.reciterId);
-  }
-
+  const ayah = resolveDuaAyahNumber(input);
   const remote = input.openDuaUrl ?? input.audioUrl ?? null;
-  return localDuaUri(remote) ?? remote;
+  const localOrRemote = localDuaUri(remote) ?? remote;
+
+  if (voice.kind === 'quran') {
+    // Always prefer the selected Qur’an reciter when an ayah is known —
+    // never keep serving the OpenDua/Jumah clip under another name.
+    if (ayah) return audioUrl(ayah, voice.reciterId);
+    // Pure Hisn duas have only Jumah on OpenDua; keep that as last resort.
+    return localOrRemote;
+  }
+
+  // OpenDua (Jumah) voice: Hisn clip first, then Qur’an ayah fallback.
+  if (localOrRemote) return localOrRemote;
+  if (ayah) return audioUrl(ayah, 'ar.alafasy');
+  return null;
 }
 
 export function duaVoiceArtist(voiceId: string) {

@@ -14,10 +14,11 @@ class SafdasActivityModule : Module() {
     Name("SafdasActivity")
 
     Function("publishWidgetSnapshot") { json: String ->
-      val context = appContext.reactContext ?: return@Function
+      val context = appContext.reactContext ?: return@Function null
       context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(SNAPSHOT, json).apply()
       val intent = Intent(context, PrayerWidgetProvider::class.java).apply { action = REFRESH }
       context.sendBroadcast(intent)
+      null
     }
 
     Function("isLiveActivityAvailable") { false }
@@ -30,13 +31,14 @@ class SafdasActivityModule : Module() {
     }
 
     Function("openExactAlarmSettings") {
-      val context = appContext.reactContext ?: return@Function
-      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return@Function
+      val context = appContext.reactContext ?: return@Function null
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return@Function null
       val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
         data = Uri.parse("package:${context.packageName}")
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       }
       context.startActivity(intent)
+      null
     }
 
     AsyncFunction("start") { city: String, prayerKey: String, prayerName: String, prayerTime: String, endsAt: Double ->

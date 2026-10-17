@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
@@ -12,6 +12,7 @@ import { isRtlLocale, useI18nStore, useT, type I18nKey } from '@/i18n';
 import { setPendingSignupEmail } from '@/lib/pendingSignup';
 import { requireSupabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
+import { AppUsageBadge } from '@/components/usage/AppUsageBadge';
 import { useTheme } from '@/theme/ThemeProvider';
 
 type DrawerApi = { open: () => void; close: () => void };
@@ -51,7 +52,6 @@ const GROUPS: { title: I18nKey; items: { title: I18nKey; icon: keyof typeof Ioni
       { title: 'duas', icon: 'heart-outline', href: '/duas' },
       { title: 'dhikr', icon: 'ellipse-outline', href: '/dhikr' },
       { title: 'dailyMsgOfDay', icon: 'sunny-outline', href: '/daily' },
-      { title: 'dailyMsgHistory', icon: 'time-outline', href: '/daily/history' },
     ],
   },
   {
@@ -206,6 +206,7 @@ function DrawerPanel({ onNavigate }: { onNavigate: () => void }) {
   const t = useT();
   const insets = useSafeAreaInsets();
   const profile = useAuthStore((state) => state.profile);
+  const isStaff = useAuthStore((state) => state.isStaff);
   const userId = useAuthStore((state) => state.session?.user.id);
   const client = useQueryClient();
   const today = new Date().toISOString().slice(0, 10);
@@ -277,6 +278,7 @@ function DrawerPanel({ onNavigate }: { onNavigate: () => void }) {
               <Text style={styles.strong}>{stats.data?.followers ?? 0}</Text> {t('followers')}
             </Text>
           </View>
+          <AppUsageBadge variant="inline" />
         </Pressable>
         <View style={styles.block}>
           <View style={styles.blockHead}>
@@ -311,7 +313,36 @@ function DrawerPanel({ onNavigate }: { onNavigate: () => void }) {
             ))}
           </View>
         ))}
+        {isStaff ? (
+          <View style={styles.block}>
+            <Text style={[styles.section, { color: colors.textSecondary }]}>{t('admin')}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('adminPanel')}
+              onPress={() => go('/admin')}
+              style={styles.row}
+            >
+              <Ionicons name="shield-outline" size={22} color={colors.primary} />
+              <Text style={[styles.rowLabel, { color: colors.primary }]}>{t('adminPanel')}</Text>
+            </Pressable>
+          </View>
+        ) : null}
         <View style={styles.block}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t('drawerSupportEmail')}
+            onPress={() => {
+              onNavigate();
+              void Linking.openURL('mailto:support@litxtech.com');
+            }}
+            style={styles.row}
+          >
+            <Ionicons name="mail-outline" size={22} color={colors.text} />
+            <View style={styles.rowText}>
+              <Text style={[styles.rowLabel, { color: colors.text }]}>{t('drawerSupportEmail')}</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 13 }}>support@litxtech.com</Text>
+            </View>
+          </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={t('signOut')}
@@ -345,5 +376,6 @@ const styles = StyleSheet.create({
   prayers: { flexDirection: 'row', gap: 6 },
   prayer: { flex: 1, minHeight: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 2 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 14, minHeight: 48 },
+  rowText: { flex: 1, gap: 2 },
   rowLabel: { fontSize: 17, fontWeight: '600' },
 });

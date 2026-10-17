@@ -3,16 +3,31 @@ import type { Locale } from '@/i18n';
 import { requireSupabase } from '@/lib/supabase';
 import type { PlayableTrack } from '@/services/audio/engine';
 import { playQueue, useAudioEngine } from '@/services/audio/engine';
-import { arabicKey, lookupDuaAudio, readDuaAudioIndex, syncDuaAudioIndex, type DuaAudioIndex } from '@/services/dua/audioCatalog';
 import {
-  DUA_AYAH_BY_SLUG,
+  arabicKey,
+  audioIndexSize,
+  bundledDuaAudioIndex,
+  lookupDuaAudio,
+  readDuaAudioIndex,
+  syncDuaAudioIndex,
+  type DuaAudioIndex,
+} from '@/services/dua/audioCatalog';
+import {
   duaVoiceArtist,
   getDuaVoice,
-  globalAyahNumber,
-  parseAyahRef,
   resolveDuaAudioUrl,
+  resolveDuaAyahNumber,
 } from '@/services/dua/voices';
-import { syncDuaCatalog, type DuaEntry } from '@/services/duaCatalog';
+import { bundledHisnEntries, type DuaEntry } from '@/services/duaCatalog';
+import { hisnCategoryLabel, hisnDuaTitle } from '@/services/dua/hisnCategories';
+import {
+  detectSurahsInText,
+  isAyatAlKursi,
+  surahCategoryKey,
+  surahCategoryLabel,
+  surahFirstAyahGlobal,
+  surahTitle,
+} from '@/services/dua/surahClassify';
 import { useDuaVoiceStore } from '@/stores/duaVoiceStore';
 
 export { arabicKey };
@@ -48,9 +63,11 @@ function pickTranslation(
   return null;
 }
 
-function categoryLabelFor(entry: Pick<DuaEntry, 'categoryEn' | 'categoryAr'>, lang: DuaLocale) {
-  if (lang === 'ar') return entry.categoryAr || entry.categoryEn || null;
-  return entry.categoryEn || entry.categoryAr || null;
+function categoryLabelFor(
+  entry: Pick<DuaEntry, 'categoryNumber' | 'categoryEn' | 'categoryAr'>,
+  lang: DuaLocale,
+) {
+  return hisnCategoryLabel(entry.categoryNumber, entry.categoryEn, entry.categoryAr, lang);
 }
 
 function compareDuaItems(a: DuaItem, b: DuaItem) {
@@ -84,20 +101,38 @@ function fillDua(current: DuaItem, next: DuaItem): DuaItem {
     ayahNumber: current.ayahNumber ?? next.ayahNumber,
     categoryNumber: current.categoryNumber ?? next.categoryNumber,
     entryNumber: current.entryNumber ?? next.entryNumber,
-    categoryLabel: current.categoryLabel ?? next.categoryLabel,
-    title: current.title ?? next.title,
-    meaning: current.meaning ?? next.meaning,
+    // Prefer newer localized labels/titles (remote refresh after locale fix).
+    categoryLabel: next.categoryLabel ?? current.categoryLabel,
+    title: next.title ?? current.title,
+    meaning: next.meaning ?? current.meaning,
     source: current.source ?? next.source,
     transliteration: current.transliteration ?? next.transliteration,
     favorite: current.favorite || next.favorite,
   };
 }
 
-function ayahFor(slug: string, source: string | null | undefined) {
-  if (DUA_AYAH_BY_SLUG[slug]) return DUA_AYAH_BY_SLUG[slug] ?? null;
-  const ref = parseAyahRef(source);
-  if (!ref) return null;
-  return globalAyahNumber(ref.surah, ref.ayah);
+function ayahFor(dua: {
+  slug: string;
+  source?: string | null;
+  arabic?: string | null;
+  categoryNumber?: string | null;
+  ayahNumber?: number | null;
+}) {
+  const resolved = resolveDuaAyahNumber({
+    ayahNumber: dua.ayahNumber,
+    slug: dua.slug,
+    source: dua.source,
+    arabic: dua.arabic,
+    categoryNumber: dua.categoryNumber,
+  });
+  if (resolved) return resolved;
+  if (dua.arabic && isAyatAlKursi(dua.arabic)) return 262;
+  if (dua.arabic) {
+    const hits = detectSurahsInText(dua.arabic, '', dua.source ?? '');
+    const first = hits[0] ? surahFirstAyahGlobal(hits[0].surah) : null;
+    if (first) return first;
+  }
+  return null;
 }
 
 function withAudio<T extends DuaItem>(dua: T, index: DuaAudioIndex | null): T {
@@ -106,7 +141,7 @@ function withAudio<T extends DuaItem>(dua: T, index: DuaAudioIndex | null): T {
     number: dua.entryNumber,
   });
   const openDuaUrl = dua.openDuaUrl ?? clip?.url ?? null;
-  const ayahNumber = dua.ayahNumber ?? ayahFor(dua.slug, dua.source);
+  const ayahNumber = ayahFor(dua);
   const voiceId = useDuaVoiceStore.getState().id;
   const audioUrl = resolveDuaAudioUrl({
     voiceId,
@@ -115,6 +150,8 @@ function withAudio<T extends DuaItem>(dua: T, index: DuaAudioIndex | null): T {
     ayahNumber,
     slug: dua.slug,
     source: dua.source,
+    arabic: dua.arabic,
+    categoryNumber: dua.categoryNumber,
   });
   return { ...dua, openDuaUrl, ayahNumber, audioUrl };
 }
@@ -123,17 +160,54 @@ function attachAudio(duas: DuaItem[], index: DuaAudioIndex | null) {
   return duas.map((dua) => withAudio(dua, index));
 }
 
+function duaMergeKey(dua: DuaItem) {
+  // Keep each category/entry distinct so the same Arabic (e.g. Kursi) can live
+  // under morning AND sleep without stealing the other section — and so Yâsîn
+  // never collapses into Secde / Alif-Lam-Mim.
+  if (dua.categoryNumber && dua.entryNumber) return `${dua.categoryNumber}:${dua.entryNumber}`;
+  if (dua.id) return `id:${dua.id}`;
+  if (dua.slug) return `slug:${dua.slug}`;
+  const arabic = arabicKey(dua.arabic);
+  if (arabic) return arabic;
+  return '';
+}
+
 export function mergeDuas(groups: DuaItem[][]) {
   const map = new Map<string, DuaItem>();
   for (const group of groups) {
     for (const dua of group) {
-      const key = arabicKey(dua.arabic);
+      const key = duaMergeKey(dua);
       if (!key) continue;
       const existing = map.get(key);
       map.set(key, existing ? fillDua(existing, dua) : dua);
     }
   }
   return [...map.values()].sort(compareDuaItems);
+}
+
+/** Sync Hisn library for instant first paint (no network / storage). */
+export function bundledDuasFor(locale: Locale): DuaItem[] {
+  try {
+    const entries = bundledHisnEntries();
+    if (entries.length >= 40) {
+      return attachAudio(fromCatalog(entries, locale), bundledDuaAudioIndex());
+    }
+  } catch {
+    /* fall through to tiny emergency list */
+  }
+  return attachAudio(fromBundle(locale, new Set()), bundledDuaAudioIndex());
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: () => T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return Promise.race([
+    promise.finally(() => {
+      if (timer) clearTimeout(timer);
+    }),
+    new Promise<T>((resolve) => {
+      timer = setTimeout(() => resolve(fallback()), ms);
+    }),
+  ]);
 }
 
 function fromBundle(locale: Locale, favorites: Set<string>): DuaItem[] {
@@ -148,7 +222,7 @@ function fromBundle(locale: Locale, favorites: Set<string>): DuaItem[] {
       transliteration: dua.transliteration,
       audioUrl: dua.audioUrl,
       openDuaUrl: null,
-      ayahNumber: ayahFor(dua.slug, source),
+      ayahNumber: ayahFor({ slug: dua.slug, source, arabic: dua.arabic }),
       title: text?.title ?? null,
       meaning: text?.meaning ?? null,
       source,
@@ -162,13 +236,16 @@ export function tracksFor(duas: DuaItem[], artist?: string): PlayableTrack[] {
   const voiceArtist = artist ?? duaVoiceArtist(voiceId);
   const tracks: PlayableTrack[] = [];
   for (const dua of duas) {
+    const ayahNumber = ayahFor(dua);
     const uri = resolveDuaAudioUrl({
       voiceId,
       openDuaUrl: dua.openDuaUrl,
       audioUrl: dua.audioUrl,
-      ayahNumber: dua.ayahNumber,
+      ayahNumber,
       slug: dua.slug,
       source: dua.source,
+      arabic: dua.arabic,
+      categoryNumber: dua.categoryNumber,
     });
     if (!uri) continue;
     tracks.push({
@@ -179,44 +256,88 @@ export function tracksFor(duas: DuaItem[], artist?: string): PlayableTrack[] {
       kind: 'dua',
       duaId: dua.id,
       duaSlug: dua.slug,
-      ayahNumber: dua.ayahNumber ?? undefined,
+      ayahNumber: ayahNumber ?? undefined,
       openDuaUrl: dua.openDuaUrl,
+      duaArabic: dua.arabic,
+      categoryNumber: dua.categoryNumber ?? undefined,
     });
   }
   return tracks;
 }
 
-export async function loadDuas(locale: Locale, userId?: string): Promise<DuaItem[]> {
-  const stored = await loadStoredDuas(locale, userId);
-  let remote: DuaItem[] = [];
+async function readCachedCatalog(locale: Locale): Promise<DuaItem[]> {
   try {
-    const { readCached } = await import('@/services/remoteStore');
-    const { DUA_CATALOG_KEY } = await import('@/services/duaCatalog');
-    const cached = await readCached<{ duas: DuaEntry[]; incomplete?: boolean }>('safdas:duas:catalog:v1');
-    const cachedV2 = await readCached<{ duas: DuaEntry[]; incomplete?: boolean }>(DUA_CATALOG_KEY);
-    const best = (cachedV2?.duas?.length ?? 0) >= (cached?.duas?.length ?? 0) ? cachedV2 : cached;
-    if (best?.duas?.length) remote = fromCatalog(best.duas, locale);
+    const { ensureBundledDuaCatalog, readDuaCatalog } = await import('@/services/duaCatalog');
+    const catalog = (await readDuaCatalog()) ?? (await ensureBundledDuaCatalog());
+    if (catalog.duas.length) return fromCatalog(catalog.duas, locale);
   } catch {
-    remote = [];
+    /* ignore */
   }
-  const audio = await readDuaAudioIndex();
-  const merged = attachAudio(mergeDuas([stored, remote]), audio);
-  return merged.length ? merged : attachAudio(stored, audio);
+  return [];
 }
 
-/** Arka planda katalog + OpenDua ses indeksi; eksik kategori varsa force tamamlar. */
+async function ensureAudioIndex(): Promise<DuaAudioIndex | null> {
+  const cached = await readDuaAudioIndex().catch(() => null);
+  if (audioIndexSize(cached) >= 20) return cached;
+  return withTimeout(syncDuaAudioIndex(), 12_000, () => cached);
+}
+
+export async function loadDuas(locale: Locale, userId?: string): Promise<DuaItem[]> {
+  // Prefer ship-time Hisn (268+) immediately — never paint only the 6 emergency slugs.
+  const hisnSync = bundledDuasFor(locale);
+  const storedPromise = withTimeout(loadStoredDuas(locale, userId), 1800, () => [] as DuaItem[]);
+  const audioPromise = ensureAudioIndex();
+
+  let remote = await readCachedCatalog(locale);
+  if (remote.length < 40) {
+    try {
+      const { bootstrapDuaCatalog, ensureBundledDuaCatalog } = await import('@/services/duaCatalog');
+      const seeded = await ensureBundledDuaCatalog();
+      if (seeded.duas.length) remote = fromCatalog(seeded.duas, locale);
+      if (remote.length < 40) {
+        const boot = await withTimeout(bootstrapDuaCatalog(28), 15_000, () => null as Awaited<ReturnType<typeof bootstrapDuaCatalog>> | null);
+        if (boot?.duas?.length) remote = fromCatalog(boot.duas, locale);
+      }
+    } catch {
+      /* keep whatever we have */
+    }
+  }
+
+  const [stored, audio, localFavorites] = await Promise.all([
+    storedPromise,
+    audioPromise,
+    userId ? readLocalFavorites(userId) : Promise.resolve(new Set<string>()),
+  ]);
+  const primary = remote.length >= 40 ? remote : remote.length ? mergeDuas([hisnSync, remote]) : hisnSync;
+  const merged = attachAudio(mergeDuas([primary, stored]), audio);
+  const withFavorites = markDuaFavorites(merged.length ? merged : hisnSync, localFavorites);
+  return withFavorites;
+}
+
+/** Katalog + OpenDua ses indeksi; eksikse bootstrap + force sync. */
 export async function refreshDuaCatalogInBackground(locale: Locale): Promise<DuaItem[] | null> {
   try {
-    const { catalogCoverage } = await import('@/services/duaCatalog');
-    let catalog = await syncDuaCatalog();
-    if (!catalogCoverage(catalog).complete) {
-      catalog = await syncDuaCatalog({ force: true });
+    const { bootstrapDuaCatalog, catalogCoverage, ensureBundledDuaCatalog, syncDuaCatalog } =
+      await import('@/services/duaCatalog');
+    const audio = await ensureAudioIndex();
+
+    let catalog = await ensureBundledDuaCatalog().catch(() => null);
+    if (!catalog || catalogCoverage(catalog).have < 40) {
+      catalog = await bootstrapDuaCatalog(28).catch(() => catalog);
     }
-    const audio = await syncDuaAudioIndex().catch(() => readDuaAudioIndex());
-    return attachAudio(fromCatalog(catalog.duas, locale), audio);
+    const coverage = catalogCoverage(catalog);
+    catalog = await syncDuaCatalog({ force: !coverage.complete || coverage.have < 40 });
+    const items = attachAudio(fromCatalog(catalog.duas, locale), audio);
+    return items.length ? items : null;
   } catch {
     return null;
   }
+}
+
+/** Tek dua için ses URL’sini canlı indeksten yeniden çöz. */
+export async function resolvePlayableDua(dua: DuaItem): Promise<DuaItem> {
+  const audio = await ensureAudioIndex();
+  return withAudio(dua, audio);
 }
 
 export async function selectDuaVoice(voiceId: string) {
@@ -230,13 +351,21 @@ export async function selectDuaVoice(voiceId: string) {
   const next = queue.map((item) => {
     if (item.kind !== 'dua') return item;
     const slug = item.duaSlug ?? item.id.replace(/^dua:(?:[^:]+:)?/, '');
+    const ayahNumber = resolveDuaAyahNumber({
+      ayahNumber: item.ayahNumber,
+      slug,
+      arabic: item.duaArabic,
+      categoryNumber: item.categoryNumber,
+    });
     const uri =
       resolveDuaAudioUrl({
         voiceId: voice.id,
         openDuaUrl: item.openDuaUrl,
-        audioUrl: item.openDuaUrl ? null : item.uri,
-        ayahNumber: item.ayahNumber,
+        audioUrl: null,
+        ayahNumber,
         slug,
+        arabic: item.duaArabic,
+        categoryNumber: item.categoryNumber,
       }) ?? item.uri;
     return {
       ...item,
@@ -244,6 +373,7 @@ export async function selectDuaVoice(voiceId: string) {
       uri,
       artist: voice.name,
       duaSlug: slug,
+      ayahNumber: ayahNumber ?? item.ayahNumber,
     };
   });
   await playQueue(next, index);
@@ -257,7 +387,7 @@ async function loadStoredDuas(locale: Locale, userId?: string): Promise<DuaItem[
       client.from('duas').select('id, slug, arabic, transliteration, source, audio_url, sort_order, dua_translations(locale, title, meaning, source)').order('sort_order'),
       userId ? client.from('dua_favorites').select('dua_id').eq('user_id', userId) : Promise.resolve({ data: [] }),
     ]);
-    if (error || !data?.length) return fromBundle(locale, new Set());
+    if (error || !data?.length) return [];
     const favoriteIds = new Set((favorites.data ?? []).map((row) => row.dua_id as string));
     return data.map((row) => {
       const translations = (row.dua_translations as { locale: string; title: string; meaning: string; source: string | null }[] | null) ?? [];
@@ -271,7 +401,7 @@ async function loadStoredDuas(locale: Locale, userId?: string): Promise<DuaItem[
         transliteration: (row.transliteration as string | null) ?? null,
         audioUrl: (row.audio_url as string | null) ?? null,
         openDuaUrl: null,
-        ayahNumber: ayahFor(slug, source),
+        ayahNumber: ayahFor({ slug, source, arabic: row.arabic as string }),
         title: chosen?.title ?? null,
         meaning: chosen?.meaning ?? null,
         source,
@@ -279,7 +409,7 @@ async function loadStoredDuas(locale: Locale, userId?: string): Promise<DuaItem[
       };
     });
   } catch {
-    return fromBundle(locale, new Set());
+    return [];
   }
 }
 
@@ -289,30 +419,67 @@ function fromCatalog(entries: DuaEntry[], locale: Locale): DuaItem[] {
     const arabic = entry.arabic.trim();
     if (!arabic) return [];
     const english = entry.english.trim();
-    const category = categoryLabelFor(entry, lang);
-    const snippet = english.split(/[.؟!?\n]/)[0]?.trim() || english.slice(0, 48);
-    const slug = entry.slug || entry.id;
-    const source = entry.reference.trim() || category;
-    // Catalog API only ships Arabic + English. Prefer locale-correct category labels;
-    // never present English copy as if it were Arabic UI text.
-    const title =
-      lang === 'ar'
-        ? category || snippet || null
-        : lang === 'en'
-          ? snippet || category
-          : category || snippet || null;
+    const hisnCategory = categoryLabelFor(entry, lang);
+    const snippet = english.split(/[.؟!?\n]/)[0]?.trim() || english.slice(0, 72);
+    const baseSlug = entry.slug || entry.id;
+    const reference = entry.reference.trim();
     const meaning = lang === 'ar' ? null : english || null;
+
+    const surahs = detectSurahsInText(arabic, english, reference);
+    if (surahs.length > 0) {
+      return surahs.map((hit) => {
+        const categoryNumber = surahCategoryKey(hit.surah);
+        const label = surahCategoryLabel(hit.surah, lang);
+        const title = surahTitle(hit.surah, lang);
+        const source = hit.source;
+        const slug = `${baseSlug}-s${hit.surah}`;
+        const split = surahs.length > 1;
+        return {
+          id: `${entry.id}:s${hit.surah}`,
+          slug,
+          // Keep full Hisn Arabic so OpenDua audio can resolve (never replace with surah title).
+          arabic,
+          transliteration: entry.transliteration ?? null,
+          audioUrl: null,
+          openDuaUrl: null,
+          ayahNumber: surahFirstAyahGlobal(hit.surah) ?? ayahFor({ slug: baseSlug, source, arabic }),
+          categoryNumber,
+          // Hisn source number for OpenDua bySource lookup (do not mangle with surah id).
+          entryNumber: entry.number,
+          categoryLabel: label,
+          title,
+          meaning: split
+            ? lang === 'tr'
+              ? `${title} suresi (Hisn: ${hisnCategory ?? '—'})`
+              : `${title} · ${hisnCategory ?? ''}`.trim()
+            : meaning,
+          source,
+          favorite: false,
+        };
+      });
+    }
+
+    const source = reference || hisnCategory;
+    const kursi = isAyatAlKursi(arabic);
+    const title = hisnDuaTitle({
+      lang,
+      categoryLabel: hisnCategory,
+      entryNumber: entry.number,
+      englishSnippet: snippet,
+      isKursi: kursi,
+    });
+
     return [{
       id: entry.id,
-      slug,
+      slug: baseSlug,
       arabic,
       transliteration: entry.transliteration ?? null,
       audioUrl: null,
       openDuaUrl: null,
-      ayahNumber: ayahFor(slug, source),
+      ayahNumber: ayahFor({ slug: baseSlug, source, arabic, categoryNumber: entry.categoryNumber }),
       categoryNumber: entry.categoryNumber,
       entryNumber: entry.number,
-      categoryLabel: category,
+      categoryLabel: hisnCategory,
       title,
       meaning,
       source,
@@ -347,15 +514,52 @@ export function groupDuasByCategory(duas: DuaItem[], fallbackTitle: string) {
     }
     section.data.push(dua);
   }
-  return sections;
+  return sections.sort((a, b) => {
+    const rank = (key: string) => {
+      if (key.startsWith('surah:')) return 2000 + Number(key.slice(6) || 0);
+      const n = Number(key);
+      return Number.isFinite(n) ? n : 5000;
+    };
+    return rank(a.key) - rank(b.key);
+  });
 }
 
 function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+function localFavoritesKey(userId: string) {
+  return `safdas:duas:favorites:v1:${userId}`;
+}
+
+async function readLocalFavorites(userId: string): Promise<Set<string>> {
+  const { readCached } = await import('@/services/remoteStore');
+  const list = await readCached<string[]>(localFavoritesKey(userId));
+  return new Set((list ?? []).filter(Boolean));
+}
+
+async function writeLocalFavorites(userId: string, ids: Set<string>) {
+  const { writeCached } = await import('@/services/remoteStore');
+  await writeCached(localFavoritesKey(userId), [...ids]);
+}
+
+export function markDuaFavorites(duas: DuaItem[], favoriteKeys: Set<string>): DuaItem[] {
+  if (!favoriteKeys.size) return duas;
+  return duas.map((dua) => ({
+    ...dua,
+    favorite: favoriteKeys.has(dua.id) || favoriteKeys.has(dua.slug) || dua.favorite,
+  }));
+}
+
+/** Heart toggle: Hisn catalog ids ("27:3") stay local; DB UUID rows sync to Supabase. */
 export async function toggleFavorite(userId: string, duaId: string, favorite: boolean) {
-  if (!isUuid(duaId)) throw new Error('favorite_unavailable');
+  const local = await readLocalFavorites(userId);
+  if (favorite) local.delete(duaId);
+  else local.add(duaId);
+  await writeLocalFavorites(userId, local);
+
+  if (!isUuid(duaId)) return;
+
   const client = requireSupabase();
   if (favorite) {
     const { error } = await client.from('dua_favorites').delete().eq('user_id', userId).eq('dua_id', duaId);
@@ -407,7 +611,7 @@ export async function loadPlaylists(userId: string, locale: Locale): Promise<Pla
             transliteration: dua?.transliteration ?? null,
             audioUrl: dua?.audio_url ?? null,
             openDuaUrl: null,
-            ayahNumber: ayahFor(slug, source),
+            ayahNumber: ayahFor({ slug, source, arabic: dua?.arabic ?? '' }),
             title: translation?.title ?? null,
             meaning: translation?.meaning ?? null,
             source,

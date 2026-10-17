@@ -2,6 +2,7 @@ import { AppState, Platform } from 'react-native';
 import { Asset } from 'expo-asset';
 import { createAudioPlayer, setAudioModeAsync, type AudioPlayer, type AudioStatus } from 'expo-audio';
 import { create } from 'zustand';
+import { alternateRemoteAudioUrls } from '@/services/quran/reciters';
 import { rememberQuranListen } from '@/stores/listenHistoryStore';
 import { usePrayerStore } from '@/stores/prayerStore';
 
@@ -21,6 +22,9 @@ export type PlayableTrack = {
   duaId?: string;
   duaSlug?: string;
   openDuaUrl?: string | null;
+  /** Used to re-resolve Qur’an reciter audio when the dua voice changes. */
+  duaArabic?: string | null;
+  categoryNumber?: string | null;
 };
 
 type EngineState = {
@@ -52,12 +56,16 @@ export const useAudioEngine = create<EngineState>(() => ({
 let player: AudioPlayer | null = null;
 let warm: AudioPlayer | null = null;
 let warmUri: string | null = null;
+let modeReady = false;
 let advancing = false;
 let startGeneration = 0;
 let artworkUrl: string | null = null;
 let onQuranEdge: ((direction: -1 | 1, reason: QuranEdgeReason) => Promise<boolean>) | null = null;
 let resolveTrackUri: ((track: PlayableTrack) => string) | null = null;
 let statusSub: { remove: () => void } | null = null;
+/** Prefetch next ayah this many seconds before the current one ends. */
+const WARM_LEAD_SEC = 3.5;
+const STATUS_INTERVAL_MS = 100;
 
 const MAX_RETRIES = 2;
 const RETRY_BASE_MS = 280;
@@ -102,7 +110,8 @@ function backgroundEnabled() {
   return usePrayerStore.getState().quranBackground;
 }
 
-async function applyMode() {
+async function applyMode(force = false) {
+  if (modeReady && !force) return;
   await setAudioModeAsync({
     playsInSilentMode: true,
     interruptionMode: 'doNotMix',
@@ -110,6 +119,7 @@ async function applyMode() {
     shouldPlayInBackground: backgroundEnabled(),
     shouldRouteThroughEarpiece: false,
   });
+  modeReady = true;
 }
 
 async function artwork() {
@@ -178,11 +188,17 @@ function createPlayer(uri: string, downloadFirst = false) {
   return createAudioPlayer(
     { uri },
     {
-      updateInterval: 250,
+      updateInterval: STATUS_INTERVAL_MS,
       keepAudioSessionActive: backgroundEnabled(),
       downloadFirst,
     },
   );
+}
+
+function markQuranProgress(track: PlayableTrack) {
+  if (track.kind === 'quran' && track.surahNumber && track.ayahInSurah) {
+    rememberQuranListen({ surahNumber: track.surahNumber, ayahInSurah: track.ayahInSurah });
+  }
 }
 
 function onStatus(status: AudioStatus) {
@@ -192,6 +208,17 @@ function onStatus(status: AudioStatus) {
     currentTime: status.currentTime,
     duration: status.duration,
   });
+
+  // Start downloading/decoding the next ayah before this one ends (gapless).
+  if (
+    status.playing &&
+    !status.didJustFinish &&
+    status.duration > 0 &&
+    status.currentTime >= Math.max(0.4, status.duration - WARM_LEAD_SEC)
+  ) {
+    void warmNext();
+  }
+
   if (!status.didJustFinish || advancing) return;
   advancing = true;
   void advanceAfterFinish().finally(() => {
@@ -207,6 +234,9 @@ async function advanceAfterFinish() {
     return;
   }
   if (index < queue.length - 1) {
+    // Prefer instant warm handoff — no applyMode / lock-screen await in the audio path.
+    const next = queue[index + 1];
+    if (next && (await trySeamlessHandoff(next, index + 1))) return;
     await startAt(index + 1);
     return;
   }
@@ -233,16 +263,19 @@ async function warmNext(fromIndex?: number) {
   if (warmUri === uri && warm) return;
   clearWarm();
   try {
+    // downloadFirst=true so the next ayah is on disk/buffer before this one ends.
     warm = createPlayer(uri, true);
     warmUri = uri;
     warm.volume = 0;
     warm.loop = false;
+    applyRate(warm);
   } catch {
     clearWarm();
   }
 }
 
-async function promoteWarm(track: PlayableTrack, generation: number) {
+/** Swap to the preloaded next player immediately — play first, chrome later. */
+function promoteWarmSync(track: PlayableTrack, generation: number) {
   const uri = trackUri(track);
   if (!warm || warmUri !== uri) return false;
   const nextPlayer = warm;
@@ -250,14 +283,22 @@ async function promoteWarm(track: PlayableTrack, generation: number) {
   warmUri = null;
   const previous = player;
   player = nextPlayer;
-  player.volume = 1;
-  player.loop = false;
+  try {
+    player.volume = 1;
+    player.loop = false;
+  } catch {
+    /* ignore */
+  }
   bindStatus(player);
   applyRate(player);
-  await showLockScreen(track);
+  try {
+    player.play();
+  } catch {
+    return false;
+  }
   if (generation !== startGeneration) return true;
-  player.play();
-  useAudioEngine.setState({ loading: false, playing: true, error: null });
+  useAudioEngine.setState({ loading: false, playing: true, error: null, currentTime: 0 });
+  markQuranProgress(track);
   if (previous && previous !== player) {
     try {
       previous.pause();
@@ -269,8 +310,20 @@ async function promoteWarm(track: PlayableTrack, generation: number) {
     } catch {
       /* ignore */
     }
-    setTimeout(() => disposePlayer(previous), 120);
+    setTimeout(() => disposePlayer(previous), 80);
   }
+  void showLockScreen(track);
+  return true;
+}
+
+async function trySeamlessHandoff(track: PlayableTrack, index: number) {
+  const uri = trackUri(track);
+  // Prefer a warm (even partially buffered) player — cold replace is what causes the audible gap.
+  if (!warm || warmUri !== uri) return false;
+  const generation = ++startGeneration;
+  useAudioEngine.setState({ index, error: null, currentTime: 0 });
+  if (!promoteWarmSync(track, generation)) return false;
+  if (generation === startGeneration) void warmNext(index);
   return true;
 }
 
@@ -281,27 +334,32 @@ async function startAt(index: number) {
     useAudioEngine.setState({ playing: false, loading: false, error: 'missing-audio' });
     return;
   }
-  const uri = trackUri(track);
-  useAudioEngine.setState({ index, loading: true, error: null, currentTime: 0 });
+  const primaryUri = trackUri(track);
+  const uris = [primaryUri, ...alternateRemoteAudioUrls(primaryUri)].filter(
+    (uri, index, list) => Boolean(uri) && list.indexOf(uri) === index,
+  );
+
+  // Gapless path: promote warm before any await.
+  useAudioEngine.setState({ index, error: null, currentTime: 0 });
+  if (promoteWarmSync(track, generation)) {
+    if (generation === startGeneration) void warmNext(index);
+    return;
+  }
+
+  useAudioEngine.setState({ loading: true });
 
   try {
     await applyMode();
     if (generation !== startGeneration) return;
 
-    if (await promoteWarm(track, generation)) {
-      if (track.kind === 'quran' && track.surahNumber && track.ayahInSurah) {
-        rememberQuranListen({ surahNumber: track.surahNumber, ayahInSurah: track.ayahInSurah });
-      }
-      if (generation === startGeneration) void warmNext(index);
-      return;
-    }
-
     let lastError: unknown;
+    let uriIndex = 0;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
       if (generation !== startGeneration) return;
+      const uri = uris[Math.min(uriIndex, uris.length - 1)] ?? primaryUri;
       try {
         if (!player) {
-          player = createPlayer(uri, false);
+          player = createPlayer(uri, true);
           bindStatus(player);
         } else {
           player.replace({ uri });
@@ -309,17 +367,16 @@ async function startAt(index: number) {
         player.loop = false;
         player.volume = 1;
         applyRate(player);
-        await showLockScreen(track);
         if (generation !== startGeneration) return;
         player.play();
         useAudioEngine.setState({ loading: false, playing: true, error: null });
-        if (track.kind === 'quran' && track.surahNumber && track.ayahInSurah) {
-          rememberQuranListen({ surahNumber: track.surahNumber, ayahInSurah: track.ayahInSurah });
-        }
+        markQuranProgress(track);
+        void showLockScreen(track);
         if (generation === startGeneration) void warmNext(index);
         return;
       } catch (error) {
         lastError = error;
+        if (uriIndex < uris.length - 1) uriIndex += 1;
         if (attempt < MAX_RETRIES) {
           await delay(RETRY_BASE_MS * (attempt + 1));
           disposePlayer(player);
@@ -464,7 +521,7 @@ if (Platform.OS !== 'web') {
 
 usePrayerStore.subscribe((state, previous) => {
   if (state.quranBackground === previous.quranBackground) return;
-  void applyMode();
+  void applyMode(true);
   if (!state.quranBackground && AppState.currentState !== 'active') {
     player?.pause();
     useAudioEngine.setState({ playing: false });
