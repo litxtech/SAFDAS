@@ -56,6 +56,7 @@ let advancing = false;
 let startGeneration = 0;
 let artworkUrl: string | null = null;
 let onQuranEdge: ((direction: -1 | 1, reason: QuranEdgeReason) => Promise<boolean>) | null = null;
+let resolveTrackUri: ((track: PlayableTrack) => string) | null = null;
 let statusSub: { remove: () => void } | null = null;
 
 const MAX_RETRIES = 2;
@@ -65,6 +66,19 @@ export function setQuranEdgeHandler(
   handler: ((direction: -1 | 1, reason: QuranEdgeReason) => Promise<boolean>) | null,
 ) {
   onQuranEdge = handler;
+}
+
+/** Optional just-in-time URI rewrite (e.g. prefer offline Quran files without scanning the whole queue). */
+export function setTrackUriResolver(handler: ((track: PlayableTrack) => string) | null) {
+  resolveTrackUri = handler;
+}
+
+function trackUri(track: PlayableTrack) {
+  try {
+    return resolveTrackUri?.(track) ?? track.uri;
+  } catch {
+    return track.uri;
+  }
 }
 
 export function currentTrack() {
@@ -215,11 +229,12 @@ async function warmNext(fromIndex?: number) {
     clearWarm();
     return;
   }
-  if (warmUri === next.uri && warm) return;
+  const uri = trackUri(next);
+  if (warmUri === uri && warm) return;
   clearWarm();
   try {
-    warm = createPlayer(next.uri, true);
-    warmUri = next.uri;
+    warm = createPlayer(uri, true);
+    warmUri = uri;
     warm.volume = 0;
     warm.loop = false;
   } catch {
@@ -228,7 +243,8 @@ async function warmNext(fromIndex?: number) {
 }
 
 async function promoteWarm(track: PlayableTrack, generation: number) {
-  if (!warm || warmUri !== track.uri) return false;
+  const uri = trackUri(track);
+  if (!warm || warmUri !== uri) return false;
   const nextPlayer = warm;
   warm = null;
   warmUri = null;
@@ -265,6 +281,7 @@ async function startAt(index: number) {
     useAudioEngine.setState({ playing: false, loading: false, error: 'missing-audio' });
     return;
   }
+  const uri = trackUri(track);
   useAudioEngine.setState({ index, loading: true, error: null, currentTime: 0 });
 
   try {
@@ -284,10 +301,10 @@ async function startAt(index: number) {
       if (generation !== startGeneration) return;
       try {
         if (!player) {
-          player = createPlayer(track.uri, false);
+          player = createPlayer(uri, false);
           bindStatus(player);
         } else {
-          player.replace({ uri: track.uri });
+          player.replace({ uri });
         }
         player.loop = false;
         player.volume = 1;

@@ -8,6 +8,7 @@ import {
   playQueue,
   prefetchAdjacent,
   setQuranEdgeHandler,
+  setTrackUriResolver,
   stopPlayback,
   togglePlayback,
   useAudioEngine,
@@ -15,7 +16,7 @@ import {
   type QuranEdgeReason,
 } from '@/services/audio/engine';
 import { fetchSurah, fetchSurahList } from '@/services/quran';
-import { audioUrl, getReciter } from '@/services/quran/reciters';
+import { audioUrl, getReciter, remoteAudioUrl } from '@/services/quran/reciters';
 import { useReadingStore, type ContinueSpan } from '@/stores/readingStore';
 import { useReciterStore } from '@/stores/reciterStore';
 
@@ -227,9 +228,10 @@ function maybePrefetchNextSurah(state: { queue: PlayableTrack[]; index: number; 
 
 async function queueSurah(input: { surahNumber: number; surahTitle: string; ayahs: QuranAyahRef[]; ayahNumber: number }) {
   const reciter = getReciter(useReciterStore.getState().id);
+  // Build the queue with CDN URIs only — local files are resolved just-in-time in the audio engine.
   const queue: PlayableTrack[] = input.ayahs.map((ayah) => ({
     id: `ayah:${reciter.id}:${ayah.number}`,
-    uri: audioUrl(ayah.number, reciter.id),
+    uri: remoteAudioUrl(ayah.number, reciter.id),
     title: `${input.surahTitle} · ${ayah.numberInSurah}`,
     artist: reciter.name,
     kind: 'quran',
@@ -249,17 +251,23 @@ export async function selectReciter(reciterId: string) {
   const { queue, index } = useAudioEngine.getState();
   const current = queue[index];
   if (!current || current.kind !== 'quran' || current.ayahNumber == null) return;
+  // Remap without sync filesystem scans (that froze the reader on long surahs).
   const next = queue.map((item) => {
     if (item.kind !== 'quran' || item.ayahNumber == null) return item;
     return {
       ...item,
       id: `ayah:${reciter.id}:${item.ayahNumber}`,
-      uri: audioUrl(item.ayahNumber, reciter.id),
+      uri: remoteAudioUrl(item.ayahNumber, reciter.id),
       artist: reciter.name,
     };
   });
   await playQueue(next, index);
 }
+
+setTrackUriResolver((track) => {
+  if (track.kind !== 'quran' || track.ayahNumber == null) return track.uri;
+  return audioUrl(track.ayahNumber, useReciterStore.getState().id);
+});
 
 export async function playSurahAyah(input: { surahNumber: number; surahTitle: string; ayahs: QuranAyahRef[]; ayahNumber: number }) {
   edgeToken += 1;
