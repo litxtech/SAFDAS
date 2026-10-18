@@ -7,6 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Cover, ListenBack, PlayFab, SeekBar, ink } from '@/components/listen/chrome';
+import { StudioStatusBadges } from '@/components/studio/StudioStatusBadges';
 import { useT } from '@/i18n';
 import {
   currentTrack,
@@ -156,6 +157,15 @@ export default function StudioDetailScreen() {
           )}
           <Text style={{ color: ink.text, fontSize: 24, fontWeight: '800', textAlign: 'center' }}>{recording.title}</Text>
           <Text style={{ color: ink.muted }}>{artist}</Text>
+          {mine ? (
+            <View style={{ alignItems: 'center', gap: 6 }}>
+              <Text style={{ color: ink.dim, fontSize: 12, fontWeight: '600' }}>{t('studioYourRecordingStatus')}</Text>
+              <StudioStatusBadges recording={recording} />
+              {recording.status === 'rejected' && recording.reject_reason ? (
+                <Text style={{ color: '#ff6b6b', fontSize: 13, textAlign: 'center' }}>{recording.reject_reason}</Text>
+              ) : null}
+            </View>
+          ) : null}
           {recording.description ? (
             <Text style={{ color: ink.muted, textAlign: 'center', lineHeight: 20 }}>{recording.description}</Text>
           ) : null}

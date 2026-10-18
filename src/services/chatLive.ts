@@ -45,6 +45,16 @@ const messageListeners = new Set<MessageListener>();
 const readListeners = new Set<ReadListener>();
 const seen = new Set<string>();
 let channelReady: Promise<void> | null = null;
+let lastInboxInvalidate = 0;
+const INBOX_INVALIDATE_MIN_MS = 8_000;
+
+function softInvalidateInbox(id: string) {
+  const now = Date.now();
+  if (now - lastInboxInvalidate < INBOX_INVALIDATE_MIN_MS) return;
+  lastInboxInvalidate = now;
+  void queryClient.invalidateQueries({ queryKey: ['conversations', id] });
+  void queryClient.invalidateQueries({ queryKey: ['unread-count', id] });
+}
 
 export const useChatLiveStore = create<ChatLiveState>((set) => ({
   activeId: null,
@@ -156,13 +166,12 @@ function applyPreview(message: LiveMessage, increment: boolean) {
   if (!id || !key) return '';
   const rows = queryClient.getQueryData<InboxRow[]>(key);
   if (!rows) {
-    void queryClient.invalidateQueries({ queryKey: ['conversations', id] });
-    void queryClient.invalidateQueries({ queryKey: ['unread-count', id] });
+    softInvalidateInbox(id);
     return '';
   }
   const current = rows.find((row) => row.id === message.conversation_id);
   if (!current) {
-    void queryClient.invalidateQueries({ queryKey: ['conversations', id] });
+    softInvalidateInbox(id);
     return '';
   }
   const mine = message.sender_id === id;

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
@@ -12,8 +12,10 @@ import { AppEmptyState } from '@/components/ui/AppEmptyState';
 import { AppSearchBar } from '@/components/ui/AppSearchBar';
 import { formatListTime } from '@/components/chat/format';
 import { useI18nStore, useT, type Locale } from '@/i18n';
+import { queryClient } from '@/lib/queryClient';
 import { requireSupabase } from '@/lib/supabase';
 import { patchConversation, removeConversation, useChatLiveStore } from '@/services/chatLive';
+import { readInboxCache } from '@/services/inboxCache';
 import { markUnread, setMuted } from '@/services/messaging';
 import { fetchInbox, type InboxRow } from '@/services/social';
 import { useAuthStore } from '@/stores/authStore';
@@ -37,10 +39,24 @@ export default function MessagesScreen() {
   const [folder, setFolder] = useState<Folder>('all');
   const [menu, setMenu] = useState<InboxRow | null>(null);
   const openSwipeRef = useRef<Swipeable | null>(null);
+  useEffect(() => {
+    if (!userId) return;
+    const key = ['conversations', userId] as const;
+    if (queryClient.getQueryData(key)) return;
+    void readInboxCache(userId).then((cached) => {
+      if (cached?.length && !queryClient.getQueryData(key)) {
+        queryClient.setQueryData(key, cached);
+      }
+    });
+  }, [userId]);
+
   const query = useQuery({
     queryKey: ['conversations', userId],
     enabled: Boolean(userId),
     queryFn: () => fetchInbox(userId as string),
+    staleTime: 20_000,
+    gcTime: 1000 * 60 * 30,
+    placeholderData: (prev) => prev,
   });
 
   const needle = term.trim().toLocaleLowerCase();
@@ -168,9 +184,9 @@ export default function MessagesScreen() {
         contentContainerStyle={styles.list}
         onScrollBeginDrag={closeOpen}
         ListEmptyComponent={
-          query.isLoading ? (
+          query.isLoading && !query.data ? (
             <View style={styles.loading}>
-              <ActivityIndicator color={colors.primary} size="large" />
+              <ActivityIndicator color={colors.primary} />
             </View>
           ) : (
             <AppEmptyState icon="chatbubbles-outline" title={t('emptyChatsTitle')} body={t('emptyChatsBody')} actionLabel={t('newMessage')} onAction={() => router.push('/chat/compose')} />

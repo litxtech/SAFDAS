@@ -90,8 +90,8 @@ async function loadMembership(userId: string): Promise<MembershipRow[]> {
 
 async function loadMessagePreviews(ids: string[]): Promise<MessagePreview[]> {
   const client = requireSupabase();
-  // Enough recent rows to cover latest + unread badges for typical inboxes.
-  const limit = Math.min(800, Math.max(120, ids.length * 8));
+  // Keep this small on Android — large scans make Messages feel stuck on “loading”.
+  const limit = Math.min(120, Math.max(40, ids.length * 2));
   const rich = await client
     .from('messages')
     .select('conversation_id, body, created_at, sender_id, deleted_at, media_url')
@@ -186,18 +186,21 @@ export async function fetchInbox(userId: string): Promise<InboxRow[]> {
     .then(({ getBlockedUserIds }) => getBlockedUserIds())
     .catch(() => new Set<string>());
 
-  const mine = await loadMembership(userId);
+  const [mine, blockedIds] = await Promise.all([loadMembership(userId), blockedPromise]);
   const ids = mine.map((row) => row.conversation_id);
-  if (!ids.length) return [];
+  if (!ids.length) {
+    const { writeInboxCache } = await import('@/services/inboxCache');
+    void writeInboxCache(userId, []);
+    return [];
+  }
 
   const mineById = new Map(mine.map((row) => [row.conversation_id, row]));
 
   // Membership already resolved — load conversation metadata, peers, and previews together.
-  const [conversationsResult, membersResult, messages, blockedIds] = await Promise.all([
+  const [conversationsResult, membersResult, messages] = await Promise.all([
     client.from('conversations').select('id, is_group, title, avatar_url').in('id', ids),
     client.from('conversation_members').select('conversation_id, user_id').in('conversation_id', ids),
     loadMessagePreviews(ids),
-    blockedPromise,
   ]);
   if (conversationsResult.error) throw conversationsResult.error;
   if (membersResult.error) throw membersResult.error;
@@ -230,7 +233,7 @@ export async function fetchInbox(userId: string): Promise<InboxRow[]> {
   }
 
   const now = Date.now();
-  return ids
+  const rows = ids
     .map((id) => {
       const self = mineById.get(id);
       const conversation = conversationMap.get(id);
@@ -270,6 +273,10 @@ export async function fetchInbox(userId: string): Promise<InboxRow[]> {
       return true;
     })
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || String(b.at ?? '').localeCompare(String(a.at ?? '')));
+
+  const { writeInboxCache } = await import('@/services/inboxCache');
+  void writeInboxCache(userId, rows);
+  return rows;
 }
 
 export function unreadInboxTotal(rows: InboxRow[]) {

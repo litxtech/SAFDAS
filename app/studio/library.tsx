@@ -5,11 +5,12 @@ import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ListenBack, ink } from '@/components/listen/chrome';
+import { StudioStatusBadges } from '@/components/studio/StudioStatusBadges';
 import { StudioTrackCard } from '@/components/studio/StudioTrackCard';
 import { useT } from '@/i18n';
 import { listMine, softDelete } from '@/services/studio/api';
 import { openStudioDetail, openStudioPublish, openStudioRecord } from '@/services/studio/nav';
-import type { StudioRecording, StudioStatus } from '@/services/studio/types';
+import type { StudioRecording } from '@/services/studio/types';
 import { useToastStore } from '@/stores/toastStore';
 
 type TabKey = 'all' | 'published' | 'drafts' | 'pending' | 'hidden' | 'rejected';
@@ -66,23 +67,6 @@ export default function StudioLibraryScreen() {
         return t('studioTabHidden');
       case 'rejected':
         return t('studioTabRejected');
-    }
-  }
-
-  function statusLabel(status: StudioStatus) {
-    switch (status) {
-      case 'published':
-        return t('studioTabPublished');
-      case 'draft':
-        return t('studioTabDrafts');
-      case 'pending_review':
-        return t('studioTabPending');
-      case 'hidden':
-        return t('studioTabHidden');
-      case 'rejected':
-        return t('studioTabRejected');
-      default:
-        return status;
     }
   }
 
@@ -150,16 +134,23 @@ export default function StudioLibraryScreen() {
                 else openStudioDetail(item.id);
               }}
             />
-            <View style={{ flexDirection: 'row', gap: 12, paddingLeft: 68 }}>
-              <Text style={{ color: ink.dim, fontSize: 12 }}>{statusLabel(item.status)}</Text>
-              {(item.status === 'draft' || item.status === 'rejected') && (
-                <Pressable onPress={() => openStudioPublish(item.id)}>
-                  <Text style={{ color: ink.green, fontSize: 12, fontWeight: '700' }}>{t('studioContinue')}</Text>
+            <View style={{ paddingLeft: 68, gap: 8 }}>
+              <StudioStatusBadges recording={item} compact />
+              {item.status === 'rejected' && item.reject_reason ? (
+                <Text style={{ color: '#ff6b6b', fontSize: 12 }} numberOfLines={2}>
+                  {item.reject_reason}
+                </Text>
+              ) : null}
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                {(item.status === 'draft' || item.status === 'rejected') && (
+                  <Pressable onPress={() => openStudioPublish(item.id)}>
+                    <Text style={{ color: ink.green, fontSize: 12, fontWeight: '700' }}>{t('studioContinue')}</Text>
+                  </Pressable>
+                )}
+                <Pressable onPress={() => void remove(item)}>
+                  <Text style={{ color: '#ff6b6b', fontSize: 12, fontWeight: '700' }}>{t('delete')}</Text>
                 </Pressable>
-              )}
-              <Pressable onPress={() => void remove(item)}>
-                <Text style={{ color: '#ff6b6b', fontSize: 12, fontWeight: '700' }}>{t('delete')}</Text>
-              </Pressable>
+              </View>
             </View>
           </View>
         )}
