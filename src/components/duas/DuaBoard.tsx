@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { startTransition, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, SectionList, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -6,24 +6,38 @@ import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useShallow } from 'zustand/react/shallow';
 import { DuaVoicePicker } from '@/components/duas/DuaVoicePicker';
 import { Cover, ListenBack, PlayFab, TrackRow, coverFor, ink } from '@/components/listen/chrome';
 import { useI18nStore, useT } from '@/i18n';
 import { playQueue, togglePlayback, useAudioEngine } from '@/services/audio/engine';
+import '@/services/audio/bindUriResolver';
 import {
+  bundledDuasFor,
+  duaIsDownloaded,
   filterDuas,
   groupDuasByCategory,
   loadDuas,
+  markDuaFavorites,
   mergeDuas,
   refreshDuaCatalogInBackground,
+  resolvePlayableDua,
   toggleFavorite,
   tracksFor,
   type DuaItem,
 } from '@/services/duas';
 import { openPlayer as navigateToPlayer } from '@/services/quran/nav';
+import { openStudioRecord } from '@/services/studio/nav';
 import { useAuthStore } from '@/stores/authStore';
 import { useDuaVoiceStore } from '@/stores/duaVoiceStore';
+import { useNetworkStore } from '@/stores/networkStore';
 import { useToastStore } from '@/stores/toastStore';
+
+function applyRemoteDuas(prev: DuaItem[] | undefined, remote: DuaItem[], locale: Parameters<typeof bundledDuasFor>[0]) {
+  const next = mergeDuas([prev?.length ? prev : bundledDuasFor(locale), remote]);
+  if (!next.length && prev?.length) return prev;
+  return next.length ? next : bundledDuasFor(locale);
+}
 
 export function DuaBoard({ focus }: { focus?: string }) {
   const t = useT();
@@ -32,41 +46,87 @@ export function DuaBoard({ focus }: { focus?: string }) {
   const userId = useAuthStore((state) => state.session?.user.id);
   const show = useToastStore((state) => state.show);
   const client = useQueryClient();
-  const engine = useAudioEngine();
+  // Avoid subscribing to currentTime — it updates many times/sec and freezes the list.
+  const { playing, current } = useAudioEngine(
+    useShallow((state) => ({
+      playing: state.playing,
+      current: state.queue[state.index] ?? null,
+    })),
+  );
   const voiceId = useDuaVoiceStore((state) => state.id);
+  const online = useNetworkStore((state) => state.online);
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<DuaItem | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [coverage, setCoverage] = useState<{ have: number; expected: number; complete: boolean } | null>(null);
+  const placeholder = useMemo(() => bundledDuasFor(locale), [locale]);
   const query = useQuery({
-    queryKey: ['duas', locale, userId, voiceId],
+    queryKey: ['duas', locale, userId],
     queryFn: () => loadDuas(locale, userId),
+    placeholderData: placeholder,
+    staleTime: 60_000,
+    networkMode: 'offlineFirst',
   });
   const duas = useMemo(() => {
-    const list = [...(query.data ?? [])];
-    if (focus) list.sort((a, b) => Number(b.slug === focus) - Number(a.slug === focus));
+    const list = [...(query.data?.length ? query.data : placeholder)];
+    if (focus) {
+      list.sort((a, b) => {
+        const score = (item: DuaItem) =>
+          Number(item.slug === focus) * 4 +
+          Number(item.categoryNumber === focus) * 3 +
+          Number(item.categoryNumber === `surah:${focus}`) * 3 +
+          Number((item.categoryLabel ?? '').toLocaleLowerCase() === focus.toLocaleLowerCase()) * 2 +
+          Number((item.title ?? '').toLocaleLowerCase() === focus.toLocaleLowerCase());
+        return score(b) - score(a);
+      });
+    }
     return list;
-  }, [focus, query.data]);
-  const filtered = useMemo(() => filterDuas(duas, search), [duas, search]);
+  }, [focus, placeholder, query.data]);
+  const filtered = useMemo(() => {
+    const base = filterDuas(duas, search);
+    if (!focus) return base;
+    const needle = focus.trim().toLocaleLowerCase();
+    const narrowed = base.filter((item) => {
+      if (item.slug === focus || item.categoryNumber === focus) return true;
+      if (item.categoryNumber === `surah:${focus}`) return true;
+      if ((item.categoryLabel ?? '').toLocaleLowerCase() === needle) return true;
+      if ((item.title ?? '').toLocaleLowerCase() === needle) return true;
+      return false;
+    });
+    return narrowed.length ? narrowed : base;
+  }, [duas, focus, search]);
   const sections = useMemo(
     () => groupDuasByCategory(filtered, t('duas')),
     [filtered, t],
   );
   const pair = coverFor(focus ?? 'duas');
-  const queue = tracksFor(filtered);
-  const current = engine.queue[engine.index];
+  const queue = useMemo(
+    () => tracksFor(filtered, undefined, { offlineOnly: !online }),
+    [filtered, voiceId, online],
+  );
   const playingDua = current?.kind === 'dua';
 
   useEffect(() => {
+    if (!online) {
+      setSyncing(false);
+      return;
+    }
     let cancelled = false;
     setSyncing(true);
     void refreshDuaCatalogInBackground(locale)
       .then(async (remote) => {
         if (cancelled) return;
         if (remote?.length) {
-          client.setQueryData(['duas', locale, userId, voiceId], (prev: DuaItem[] | undefined) =>
-            mergeDuas([prev ?? [], remote]),
-          );
+          startTransition(() => {
+            client.setQueryData(['duas', locale, userId], (prev: DuaItem[] | undefined) => {
+              const merged = applyRemoteDuas(prev, remote, locale);
+              // Keep hearts from the previous list (local + optimistic toggles).
+              const hearts = new Set(
+                (prev ?? []).filter((item) => item.favorite).flatMap((item) => [item.id, item.slug]),
+              );
+              return markDuaFavorites(merged, hearts);
+            });
+          });
         }
         try {
           const duaCatalog = await import('@/services/duaCatalog');
@@ -83,36 +143,64 @@ export function DuaBoard({ focus }: { focus?: string }) {
     return () => {
       cancelled = true;
     };
-  }, [locale, userId, voiceId, client]);
+  }, [locale, userId, client, online]);
 
   async function playAt(dua: DuaItem, openPlayer = false) {
-    const index = queue.findIndex(
-      (track) => track.duaId === dua.id || track.duaSlug === dua.slug || track.id.endsWith(`:${dua.slug}`),
-    );
-    if (index < 0) {
+    if (!online && !duaIsDownloaded(dua)) {
+      show(t('offlineDuaEmpty'), 'info');
       setSelected(dua);
       return;
     }
-    const selectedTrack = queue[index];
-    if (selectedTrack && current?.id === selectedTrack.id) {
+
+    let playableQueue = queue;
+    let index = playableQueue.findIndex(
+      (track) => track.duaId === dua.id || track.duaSlug === dua.slug || track.id.endsWith(`:${dua.slug}`),
+    );
+
+    if (index < 0) {
+      const enriched = online ? await resolvePlayableDua(dua) : dua;
+      if (online) {
+        client.setQueryData(['duas', locale, userId], (prev: DuaItem[] | undefined) => {
+          const list = prev?.length ? prev : placeholder;
+          return list.map((item) => (item.id === enriched.id || item.slug === enriched.slug ? enriched : item));
+        });
+      }
+      const single = tracksFor([enriched], undefined, { offlineOnly: !online });
+      if (!single.length) {
+        show(!online ? t('offlineDuaEmpty') : t('audioMissing'), 'info');
+        setSelected(enriched);
+        return;
+      }
+      playableQueue = single;
+      index = 0;
+    }
+
+    const selectedTrack = playableQueue[index];
+    // Only pause when already playing this track — otherwise always start (fixes 2-tap).
+    if (selectedTrack && current?.id === selectedTrack.id && playing) {
       if (!openPlayer) togglePlayback();
     } else {
-      await playQueue(queue, index);
+      await playQueue(playableQueue, index);
+      const err = useAudioEngine.getState().error;
+      if (err && err !== 'missing-audio') {
+        show(!online ? t('offlineDuaEmpty') : t('audioMissing'), 'error');
+        return;
+      }
     }
     if (openPlayer) navigateToPlayer();
   }
 
   async function playAll() {
     if (!queue.length) {
-      show(t('audioMissing'), 'info');
+      show(!online ? t('offlineDuaEmpty') : t('audioMissing'), 'info');
       return;
     }
-    if (playingDua) {
+    if (playingDua && playing) {
       togglePlayback();
       return;
     }
     const start = focus ? Math.max(0, queue.findIndex((track) => duas.find((dua) => dua.slug === focus)?.id === track.duaId)) : 0;
-    await playQueue(queue, start);
+    await playQueue(queue, Math.max(0, start));
   }
 
   return (
@@ -123,8 +211,13 @@ export function DuaBoard({ focus }: { focus?: string }) {
         keyExtractor={(item) => item.id}
         stickySectionHeadersEnabled
         contentContainerStyle={{ paddingBottom: 140 }}
-        extraData={engine}
+        extraData={`${playing ? 1 : 0}:${current?.id ?? ''}:${filtered.length}:${voiceId}`}
         keyboardShouldPersistTaps="handled"
+        initialNumToRender={12}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        removeClippedSubviews
+        updateCellsBatchingPeriod={50}
         ListHeaderComponent={
           <View>
             <LinearGradient
@@ -140,6 +233,25 @@ export function DuaBoard({ focus }: { focus?: string }) {
               <Cover seed={focus ?? 'duas'} label={t('duas')} size={180} />
               <Text style={{ color: ink.text, fontSize: 32, fontWeight: '800' }}>{t('duas')}</Text>
               <Text style={{ color: ink.muted, lineHeight: 20 }}>{t('duasSubtitle')}</Text>
+              {!online ? (
+                <Pressable
+                  onPress={() => router.push('/settings/downloads')}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 8,
+                    backgroundColor: 'rgba(29,185,84,0.16)',
+                    borderRadius: 10,
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                  }}
+                >
+                  <Ionicons name="cloud-offline-outline" size={18} color={ink.green} />
+                  <Text style={{ color: ink.green, fontWeight: '700', flex: 1, lineHeight: 18 }}>
+                    {t('offlineDuaOnly')}
+                  </Text>
+                </Pressable>
+              ) : null}
               <View
                 style={{
                   backgroundColor: ink.raised,
@@ -185,8 +297,29 @@ export function DuaBoard({ focus }: { focus?: string }) {
                   ) : null}
                   {syncing ? <Text style={{ color: ink.muted, fontSize: 12 }}>{t('listUpdating')}</Text> : null}
                 </View>
-                <PlayFab playing={Boolean(playingDua && engine.playing)} onPress={() => void playAll()} />
+                <PlayFab playing={Boolean(playingDua && playing)} onPress={() => void playAll()} />
               </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t('studioVoiceDua')}
+                onPress={() => openStudioRecord({ contentType: 'dua', title: t('studioRecordDuaDefault') })}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 10,
+                  backgroundColor: 'rgba(137,87,245,0.18)',
+                  borderRadius: 12,
+                  paddingHorizontal: 14,
+                  paddingVertical: 12,
+                }}
+              >
+                <Ionicons name="mic" size={20} color="#C4A7FF" />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: ink.text, fontWeight: '800' }}>{t('studioVoiceDua')}</Text>
+                  <Text style={{ color: ink.muted, fontSize: 12, marginTop: 2 }}>{t('studioVoiceDuaHint')}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={ink.muted} />
+              </Pressable>
               {query.isLoading ? <ActivityIndicator color={ink.green} /> : null}
               {query.error ? (
                 <Text style={{ color: ink.green }} onPress={() => void query.refetch()}>
@@ -201,8 +334,8 @@ export function DuaBoard({ focus }: { focus?: string }) {
                     void refreshDuaCatalogInBackground(locale)
                       .then(async (remote) => {
                         if (remote?.length) {
-                          client.setQueryData(['duas', locale, userId, voiceId], (prev: DuaItem[] | undefined) =>
-                            mergeDuas([prev ?? [], remote]),
+                          client.setQueryData(['duas', locale, userId], (prev: DuaItem[] | undefined) =>
+                            applyRemoteDuas(prev, remote, locale),
                           );
                         }
                         const duaCatalog = await import('@/services/duaCatalog');
@@ -216,7 +349,7 @@ export function DuaBoard({ focus }: { focus?: string }) {
                   {t('duasPartial')}
                 </Text>
               ) : null}
-              {!query.isLoading && !filtered.length ? (
+              {!query.isLoading && !query.isFetching && !filtered.length ? (
                 <View style={{ gap: 6, paddingVertical: 8 }}>
                   <Text style={{ color: ink.text, fontWeight: '700' }}>{t('noDuaTitle')}</Text>
                   <Text style={{ color: ink.muted, lineHeight: 20 }}>{t('noDuaBody')}</Text>
@@ -235,32 +368,66 @@ export function DuaBoard({ focus }: { focus?: string }) {
             current?.duaId === item.id ||
             current?.duaSlug === item.slug ||
             Boolean(current?.id.endsWith(`:${item.slug}`));
-          const hasAudio = Boolean(item.audioUrl || item.openDuaUrl || item.ayahNumber);
+          const downloaded = duaIsDownloaded(item);
+          const hasAudio = downloaded || Boolean(item.audioUrl || item.openDuaUrl || item.ayahNumber);
+          const mutedOffline = !online && !downloaded;
           return (
             <TrackRow
               index={index + 1}
               title={item.title ?? t('noTranslation')}
               subtitle={item.arabic || item.meaning || item.source || undefined}
               active={active}
-              playing={active && engine.playing}
+              playing={active && playing}
               onPress={() => void playAt(item)}
               trailing={
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  {hasAudio ? (
-                    <Ionicons name="volume-medium-outline" size={16} color={ink.green} />
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, opacity: mutedOffline ? 0.45 : 1 }}>
+                  <Pressable
+                    accessibilityLabel={t('studioVoiceDua')}
+                    hitSlop={8}
+                    onPress={() =>
+                      openStudioRecord({
+                        contentType: 'dua',
+                        duaId: item.id,
+                        title: item.title ?? t('studioRecordDuaDefault'),
+                      })
+                    }
+                  >
+                    <Ionicons name="mic-outline" size={18} color="#C4A7FF" />
+                  </Pressable>
+                  {downloaded ? (
+                    <Ionicons name="checkmark-circle" size={16} color={ink.green} />
+                  ) : hasAudio ? (
+                    <Ionicons name="volume-medium-outline" size={16} color={ink.muted} />
                   ) : (
                     <Ionicons name="book-outline" size={16} color={ink.muted} />
                   )}
                   <Pressable
-                    accessibilityLabel={t('duas')}
+                    accessibilityLabel={item.favorite ? t('duaFavoriteRemoved') : t('duaFavoriteAdded')}
                     hitSlop={8}
                     onPress={() => {
-                      if (!userId) return;
-                      void toggleFavorite(userId, item.id, item.favorite)
-                        .then(() => client.invalidateQueries({ queryKey: ['duas'] }))
+                      if (!userId) {
+                        show(t('duaFavoriteLogin'), 'info');
+                        return;
+                      }
+                      const wasFavorite = item.favorite;
+                      client.setQueryData(['duas', locale, userId], (prev: DuaItem[] | undefined) => {
+                        const list = prev?.length ? prev : placeholder;
+                        return list.map((row) =>
+                          row.id === item.id || row.slug === item.slug ? { ...row, favorite: !wasFavorite } : row,
+                        );
+                      });
+                      void toggleFavorite(userId, item.id, wasFavorite)
+                        .then(() => {
+                          show(wasFavorite ? t('duaFavoriteRemoved') : t('duaFavoriteAdded'), 'success');
+                        })
                         .catch((error: Error) => {
-                          if (error.message === 'favorite_unavailable') show(t('noTranslation'), 'info');
-                          else show(error.message, 'error');
+                          client.setQueryData(['duas', locale, userId], (prev: DuaItem[] | undefined) => {
+                            const list = prev?.length ? prev : placeholder;
+                            return list.map((row) =>
+                              row.id === item.id || row.slug === item.slug ? { ...row, favorite: wasFavorite } : row,
+                            );
+                          });
+                          show(error.message, 'error');
                         });
                     }}
                   >

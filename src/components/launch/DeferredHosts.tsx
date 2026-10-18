@@ -19,19 +19,23 @@ export function DeferredHosts() {
         import('@/components/calls/CallHost'),
         import('@/components/prayer/PrayerAlertSync'),
         import('@/components/audio/MiniPlayer'),
+        import('@/components/studio/StudioListenTracker'),
         import('@/components/safety/ReportSheet'),
         import('@/components/daily/DailyMessageSync'),
         import('@/components/share/ShareLinkSync'),
-      ]).then(([chat, calls, prayer, audio, safety, daily, share]) => {
+        import('@/components/offline/OfflineBanner'),
+      ]).then(([chat, calls, prayer, audio, studioListen, safety, daily, share, offline]) => {
         setHosts(() => () => (
           <>
             <chat.ChatLive />
             <calls.CallHost />
             <prayer.PrayerAlertSync />
             <audio.MiniPlayer />
+            <studioListen.StudioListenTracker />
             <safety.ReportSheetHost />
             <daily.DailyMessageSync />
             <share.ShareLinkSync />
+            <offline.OfflineBanner />
           </>
         ));
         setMount(true);

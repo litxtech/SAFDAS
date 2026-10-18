@@ -4,13 +4,26 @@ import { useQuery } from '@tanstack/react-query';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useShallow } from 'zustand/react/shallow';
 import { DuaVoicePicker } from '@/components/duas/DuaVoicePicker';
+import { Image } from 'expo-image';
 import { Cover, ListenBack, SeekBar, Transport, coverFor, ink } from '@/components/listen/chrome';
+import { openStudioDetail } from '@/services/studio/nav';
 import { AutoNextSurahToggle } from '@/components/quran/AutoNextSurahToggle';
 import { ContinueSpanPicker } from '@/components/quran/ContinueSpanPicker';
 import { ReciterPicker } from '@/components/quran/ReciterPicker';
 import { useI18nStore, useT } from '@/i18n';
-import { cyclePlaybackRate, cycleRepeatMode, playAdjacent, playQueue, retryPlayback, seekPlayback, togglePlayback, useAudioEngine, type PlayableTrack } from '@/services/audio/engine';
+import {
+  cyclePlaybackRate,
+  cycleRepeatMode,
+  playAdjacent,
+  playQueue,
+  retryPlayback,
+  seekPlayback,
+  togglePlayback,
+  useAudioEngine,
+  type PlayableTrack,
+} from '@/services/audio/engine';
 import { loadDuas, type DuaItem } from '@/services/duas';
 import { fetchSurah, type Ayah } from '@/services/quran';
 import { playSurahAyah, useQuranPlayer } from '@/services/quran/playback';
@@ -18,10 +31,28 @@ import { useAuthStore } from '@/stores/authStore';
 import { useDuaVoiceStore } from '@/stores/duaVoiceStore';
 import { useReadingStore } from '@/stores/readingStore';
 
+/** Clock-only — keeps ayah list from re-rendering 10×/sec with audio ticks. */
+function PlayerSeekBar() {
+  const current = useAudioEngine((state) => state.currentTime);
+  const duration = useAudioEngine((state) => state.duration);
+  return <SeekBar current={current} duration={duration} onSeek={(seconds) => void seekPlayback(seconds)} />;
+}
+
 export default function PlayerScreen() {
   const t = useT();
   const insets = useSafeAreaInsets();
-  const engine = useAudioEngine();
+  // Never subscribe to currentTime here — it updates every status tick and freezes/crashes the screen.
+  const engine = useAudioEngine(
+    useShallow((state) => ({
+      queue: state.queue,
+      index: state.index,
+      playing: state.playing,
+      loading: state.loading,
+      error: state.error,
+      repeatMode: state.repeatMode,
+      playbackRate: state.playbackRate,
+    })),
+  );
   const track = engine.queue[engine.index];
   const pair = coverFor(track?.id ?? 'idle');
   const [shuffled, setShuffled] = useState(false);
@@ -56,6 +87,8 @@ export default function PlayerScreen() {
         <View style={{ flex: 1 }}>
           {track?.kind === 'quran' && track.surahNumber ? (
             <QuranLyrics surahNumber={track.surahNumber} title={track.title} />
+          ) : track?.kind === 'studio' ? (
+            <StudioHero track={track} />
           ) : (
             <DuaLyrics />
           )}
@@ -72,7 +105,7 @@ export default function PlayerScreen() {
               <ContinueSpanPicker />
             </>
           ) : null}
-          <SeekBar current={engine.currentTime} duration={engine.duration} onSeek={(seconds) => void seekPlayback(seconds)} />
+          <PlayerSeekBar />
           <Transport
             playing={engine.playing}
             loading={engine.loading}
@@ -98,21 +131,50 @@ function lyricColor(distance: number) {
   return ink.dim;
 }
 
+function StudioHero({ track }: { track: PlayableTrack }) {
+  const t = useT();
+  return (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28, gap: 18 }}>
+      {track.artworkUrl ? (
+        <Image source={{ uri: track.artworkUrl }} style={{ width: 240, height: 240, borderRadius: 8 }} contentFit="cover" />
+      ) : (
+        <Cover seed={track.studioRecordingId ?? track.id} label={track.title} size={240} radius={8} />
+      )}
+      <View style={{ alignItems: 'center', gap: 6 }}>
+        <Text style={{ color: ink.text, fontSize: 22, fontWeight: '800', textAlign: 'center' }} numberOfLines={2}>
+          {track.title}
+        </Text>
+        <Text style={{ color: ink.muted, fontSize: 15, textAlign: 'center' }} numberOfLines={1}>
+          {track.artist}
+        </Text>
+        <Text style={{ color: ink.dim, fontSize: 12, fontWeight: '700' }}>{t('studioTitle')}</Text>
+      </View>
+      {track.studioRecordingId ? (
+        <Pressable onPress={() => openStudioDetail(track.studioRecordingId as string)}>
+          <Text style={{ color: ink.green, fontWeight: '700' }}>{t('studioOpenDetail')}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 function QuranLyrics({ surahNumber, title }: { surahNumber: number; title: string }) {
   const t = useT();
   const locale = useI18nStore((state) => state.locale);
   const mealSize = useReadingStore((state) => state.mealSize);
   const fontSize = useReadingStore((state) => state.fontSize);
-  const player = useQuranPlayer();
+  const ayahInSurah = useQuranPlayer((state) => state.ayahInSurah);
   const listRef = useRef<FlatList<Ayah>>(null);
   const [follow, setFollow] = useState(true);
   const query = useQuery({ queryKey: ['surah', surahNumber, locale], queryFn: () => fetchSurah(surahNumber, locale) });
   const ayahs = query.data ?? [];
-  const currentIndex = ayahs.findIndex((ayah) => ayah.numberInSurah === player.ayahInSurah);
+  const currentIndex = ayahs.findIndex((ayah) => ayah.numberInSurah === ayahInSurah);
 
   useEffect(() => {
     if (!follow || currentIndex < 0) return;
-    listRef.current?.scrollToIndex({ index: currentIndex, viewPosition: 0.28, animated: true });
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToIndex({ index: currentIndex, viewPosition: 0.28, animated: true });
+    });
   }, [currentIndex, follow]);
 
   async function jump(ayah: Ayah) {
@@ -132,7 +194,7 @@ function QuranLyrics({ surahNumber, title }: { surahNumber: number; title: strin
         data={ayahs}
         keyExtractor={(item) => String(item.number)}
         contentContainerStyle={{ paddingHorizontal: 22, paddingBottom: 24, gap: 22 }}
-        extraData={player.ayahInSurah}
+        extraData={ayahInSurah}
         onScrollBeginDrag={() => setFollow(false)}
         onScrollToIndexFailed={(info) => {
           listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
@@ -179,16 +241,19 @@ function DuaLyrics() {
   const locale = useI18nStore((state) => state.locale);
   const userId = useAuthStore((state) => state.session?.user.id);
   const voiceId = useDuaVoiceStore((state) => state.id);
-  const engine = useAudioEngine();
+  const queue = useAudioEngine((state) => state.queue);
+  const index = useAudioEngine((state) => state.index);
+  const track = queue[index];
   const listRef = useRef<FlatList<PlayableTrack>>(null);
   const [follow, setFollow] = useState(true);
   const duas = useQuery({ queryKey: ['duas', locale, userId, voiceId], queryFn: () => loadDuas(locale, userId) });
-  const track = engine.queue[engine.index];
 
   useEffect(() => {
-    if (!follow || engine.index < 0) return;
-    listRef.current?.scrollToIndex({ index: engine.index, viewPosition: 0.28, animated: true });
-  }, [engine.index, follow]);
+    if (!follow || index < 0 || index >= queue.length) return;
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToIndex({ index, viewPosition: 0.28, animated: true });
+    });
+  }, [index, follow, queue.length]);
 
   function match(item: PlayableTrack): DuaItem | undefined {
     return duas.data?.find((dua) => dua.id === item.duaId || `dua:${dua.slug}` === item.id);
@@ -198,10 +263,10 @@ function DuaLyrics() {
     <View style={{ flex: 1 }}>
       <FlatList
         ref={listRef}
-        data={engine.queue}
+        data={queue}
         keyExtractor={(item) => item.id}
         contentContainerStyle={{ paddingHorizontal: 22, paddingBottom: 24, gap: 22 }}
-        extraData={engine.index}
+        extraData={index}
         onScrollBeginDrag={() => setFollow(false)}
         onScrollToIndexFailed={(info) => {
           listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
@@ -213,12 +278,12 @@ function DuaLyrics() {
             <DuaVoicePicker centered />
           </View>
         }
-        renderItem={({ item, index }) => {
-          const distance = index - engine.index;
+        renderItem={({ item, index: rowIndex }) => {
+          const distance = rowIndex - index;
           const current = distance === 0;
           const dua = match(item);
           return (
-            <Pressable onPress={() => void playQueue(engine.queue, index)} style={{ gap: 8 }}>
+            <Pressable onPress={() => void playQueue(queue, rowIndex)} style={{ gap: 8 }}>
               {current && dua ? (
                 <Text style={{ color: ink.text, fontSize: 26, lineHeight: 42, textAlign: 'right', writingDirection: 'rtl', fontWeight: '700' }}>{dua.arabic}</Text>
               ) : null}

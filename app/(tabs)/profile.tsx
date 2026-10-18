@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { router, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,6 +14,8 @@ import { ImageLightbox } from '@/components/ui/ImageLightbox';
 import { requireSupabase } from '@/lib/supabase';
 import { isVideoMedia } from '@/services/media';
 import { fetchAuthorPosts } from '@/services/feed';
+import { fetchOwnerRecordings } from '@/services/studio/api';
+import { openStudioDetail, openStudioLibrary } from '@/services/studio/nav';
 import { useT } from '@/i18n';
 import { useAuthStore } from '@/stores/authStore';
 import { useLocationPickStore } from '@/stores/locationPickStore';
@@ -38,7 +40,9 @@ function ProfileBody() {
   const userId = useAuthStore((state) => state.session?.user.id);
   const [tab, setTab] = useState('posts');
   const [coverOpen, setCoverOpen] = useState(false);
+  const [avatarOpen, setAvatarOpen] = useState(false);
   const insets = useSafeAreaInsets();
+  const queryClient = useQueryClient();
 
   useFocusEffect(
     useCallback(() => {
@@ -61,6 +65,11 @@ function ProfileBody() {
     queryKey: ['author-posts', userId, userId],
     enabled: Boolean(userId),
     queryFn: () => fetchAuthorPosts(userId as string, userId as string),
+  });
+  const studio = useQuery({
+    queryKey: ['profile-studio', userId],
+    enabled: Boolean(userId) && tab === 'voices',
+    queryFn: () => fetchOwnerRecordings(userId as string),
   });
   useFocusEffect(
     useCallback(() => {
@@ -112,9 +121,20 @@ function ProfileBody() {
           <Ionicons name="menu-outline" size={22} color={colors.text} />
         </Pressable>
       </View>
-      <ImageLightbox uri={profile?.cover_url} visible={coverOpen} onClose={() => setCoverOpen(false)} />
+      <ImageLightbox uri={profile?.cover_url} visible={coverOpen} onClose={() => setCoverOpen(false)} accessibilityLabel={t('cover')} />
+      <ImageLightbox uri={profile?.avatar_url} visible={avatarOpen} onClose={() => setAvatarOpen(false)} accessibilityLabel={t('avatar')} />
       <View style={{ paddingHorizontal: 16, marginTop: -36, gap: 12 }}>
-        <AppAvatar uri={profile?.avatar_url} name={profile?.display_name} size={84} />
+        {profile?.avatar_url ? (
+          <Pressable
+            accessibilityRole="imagebutton"
+            accessibilityLabel={t('avatar')}
+            onPress={() => setAvatarOpen(true)}
+          >
+            <AppAvatar uri={profile.avatar_url} name={profile?.display_name} size={84} />
+          </Pressable>
+        ) : (
+          <AppAvatar uri={profile?.avatar_url} name={profile?.display_name} size={84} />
+        )}
         <Text style={{ color: colors.text, fontSize: 24, fontWeight: '700' }}>
           {profile?.display_name} {profile?.verified ? '✓' : ''}
         </Text>
@@ -152,13 +172,61 @@ function ProfileBody() {
           tabs={[
             { key: 'posts', label: t('posts') },
             { key: 'videos', label: t('videos') },
+            { key: 'voices', label: t('studioVoicesTab') },
           ]}
         />
-        {posts.isLoading ? null : visiblePosts.length === 0 ? (
+        {tab === 'voices' ? (
+          <View style={{ gap: 10 }}>
+            <Pressable
+              onPress={openStudioLibrary}
+              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 40 }}
+            >
+              <Text style={{ color: colors.primary, fontWeight: '700' }}>{t('studioLibrary')}</Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+            </Pressable>
+            {studio.isLoading ? null : !(studio.data?.length ?? 0) ? (
+              <Text style={{ color: colors.textSecondary }}>{t('studioLibraryEmpty')}</Text>
+            ) : (
+              (studio.data ?? []).map((item) => (
+                <Pressable
+                  key={item.id}
+                  onPress={() => openStudioDetail(item.id)}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 10,
+                    minHeight: 52,
+                    borderBottomWidth: StyleSheet.hairlineWidth,
+                    borderBottomColor: colors.border,
+                    paddingVertical: 8,
+                  }}
+                >
+                  <Ionicons name="musical-notes" size={20} color={colors.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.text, fontWeight: '700' }} numberOfLines={1}>
+                      {item.title}
+                    </Text>
+                    <Text style={{ color: colors.textSecondary, fontSize: 12 }}>
+                      {item.unique_listeners} · {Math.round(item.duration_seconds)}s
+                    </Text>
+                  </View>
+                </Pressable>
+              ))
+            )}
+          </View>
+        ) : posts.isLoading ? null : visiblePosts.length === 0 ? (
           <Text style={{ color: colors.textSecondary }}>{t('emptyTab')}</Text>
         ) : (
           <View style={styles.gridBleed}>
-            <ProfilePostGrid posts={visiblePosts} />
+            <ProfilePostGrid
+              posts={visiblePosts}
+              canManage
+              onDeleted={() => {
+                void queryClient.invalidateQueries({ queryKey: ['author-posts', userId] });
+                void queryClient.invalidateQueries({ queryKey: ['profile-stats', userId] });
+                void queryClient.invalidateQueries({ queryKey: ['feed'] });
+              }}
+            />
           </View>
         )}
       </View>

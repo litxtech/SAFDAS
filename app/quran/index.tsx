@@ -1,14 +1,16 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { Cover, ListenBack, PlayFab, ink } from '@/components/listen/chrome';
 import { useI18nStore, useT } from '@/i18n';
 import { fetchSurah, fetchSurahList, surahFacts, syncQuran, type SurahSummary } from '@/services/quran';
 import { openPlayer, openRecentListens, openSurah } from '@/services/quran/nav';
 import { playSurahAyah } from '@/services/quran/playback';
+import { openStudioRecord } from '@/services/studio/nav';
 import { useListenHistory, type RecentListen } from '@/stores/listenHistoryStore';
 
 export default function QuranIndex() {
@@ -16,9 +18,24 @@ export default function QuranIndex() {
   const insets = useSafeAreaInsets();
   const locale = useI18nStore((state) => state.locale);
   const [search, setSearch] = useState('');
+  const [prefetchBook, setPrefetchBook] = useState(false);
   const recent = useListenHistory((state) => state.items);
-  const query = useQuery({ queryKey: ['surahs', locale], queryFn: () => fetchSurahList(locale), staleTime: 60_000 });
-  const book = useQuery({ queryKey: ['quran-book', locale], queryFn: () => syncQuran(locale), staleTime: 6 * 60 * 60 * 1000 });
+  const query = useQuery({
+    queryKey: ['surahs', locale],
+    queryFn: () => fetchSurahList(locale),
+    staleTime: 6 * 60 * 60 * 1000,
+  });
+  const book = useQuery({
+    queryKey: ['quran-book', locale],
+    queryFn: () => syncQuran(locale),
+    staleTime: 6 * 60 * 60 * 1000,
+    enabled: prefetchBook,
+  });
+
+  useEffect(() => {
+    const timer = setTimeout(() => setPrefetchBook(true), 600);
+    return () => clearTimeout(timer);
+  }, [locale]);
   const data = (query.data ?? []).filter((surah) => {
     const haystack = `${surah.englishName} ${surah.englishNameTranslation} ${surah.name} ${surah.number}`.toLowerCase();
     return haystack.includes(search.toLowerCase());
@@ -56,6 +73,22 @@ export default function QuranIndex() {
               />
             </View>
             <Text style={{ color: ink.text, fontSize: 32, fontWeight: '800', paddingHorizontal: 16 }}>{t('quran')}</Text>
+            <Pressable
+              onPress={() => openStudioRecord({ contentType: 'quran', title: t('studioRecordQuranDefault') })}
+              style={{
+                marginHorizontal: 16,
+                minHeight: 44,
+                borderRadius: 999,
+                backgroundColor: ink.green,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+              }}
+            >
+              <Ionicons name="mic" size={18} color="#000" />
+              <Text style={{ color: '#000', fontWeight: '800' }}>{t('studioReadWithMyVoice')}</Text>
+            </Pressable>
             <View style={{ marginHorizontal: 16, backgroundColor: ink.raised, borderRadius: 8, minHeight: 44, justifyContent: 'center', paddingHorizontal: 14 }}>
               <TextInput
                 value={search}

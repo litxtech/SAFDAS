@@ -13,6 +13,7 @@ import { setPendingSignupEmail } from '@/lib/pendingSignup';
 import { requireSupabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
 import { AppUsageBadge } from '@/components/usage/AppUsageBadge';
+import { getRamadanMenuYear } from '@/services/ramadan/calendar2027';
 import { useTheme } from '@/theme/ThemeProvider';
 
 type DrawerApi = { open: () => void; close: () => void };
@@ -41,6 +42,7 @@ const GROUPS: { title: I18nKey; items: { title: I18nKey; icon: keyof typeof Ioni
     title: 'drawerPrayer',
     items: [
       { title: 'prayerTimes', icon: 'time-outline', href: '/prayer' },
+      { title: 'salahDuasTitle', icon: 'book-outline', href: '/prayer/duas' },
       { title: 'prayerTrack', icon: 'checkmark-circle-outline', href: '/prayer/track' },
       { title: 'qibla', icon: 'compass-outline', href: '/qibla' },
     ],
@@ -52,6 +54,7 @@ const GROUPS: { title: I18nKey; items: { title: I18nKey; icon: keyof typeof Ioni
       { title: 'duas', icon: 'heart-outline', href: '/duas' },
       { title: 'dhikr', icon: 'ellipse-outline', href: '/dhikr' },
       { title: 'dailyMsgOfDay', icon: 'sunny-outline', href: '/daily' },
+      { title: 'studioTitle', icon: 'mic-outline', href: '/studio' },
     ],
   },
   {
@@ -207,6 +210,15 @@ function DrawerPanel({ onNavigate }: { onNavigate: () => void }) {
   const insets = useSafeAreaInsets();
   const profile = useAuthStore((state) => state.profile);
   const isStaff = useAuthStore((state) => state.isStaff);
+  const adminBadge = useQuery({
+    queryKey: ['admin-badge'],
+    enabled: isStaff,
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const { fetchAdminBadgeTotal } = await import('@/services/admin/alerts');
+      return fetchAdminBadgeTotal();
+    },
+  });
   const userId = useAuthStore((state) => state.session?.user.id);
   const client = useQueryClient();
   const today = new Date().toISOString().slice(0, 10);
@@ -305,12 +317,16 @@ function DrawerPanel({ onNavigate }: { onNavigate: () => void }) {
         {GROUPS.map((group) => (
           <View key={group.title} style={styles.block}>
             <Text style={[styles.section, { color: colors.textSecondary }]}>{t(group.title)}</Text>
-            {group.items.map((item) => (
-              <Pressable key={item.title} accessibilityRole="button" onPress={() => go(item.href)} style={styles.row}>
-                <Ionicons name={item.icon} size={22} color={colors.text} />
-                <Text style={[styles.rowLabel, { color: colors.text }]}>{t(item.title)}</Text>
-              </Pressable>
-            ))}
+            {group.items.map((item) => {
+              const label =
+                item.title === 'ramadan' ? `${t('ramadan')} ${getRamadanMenuYear()}` : t(item.title);
+              return (
+                <Pressable key={item.title} accessibilityRole="button" onPress={() => go(item.href)} style={styles.row}>
+                  <Ionicons name={item.icon} size={22} color={colors.text} />
+                  <Text style={[styles.rowLabel, { color: colors.text }]}>{label}</Text>
+                </Pressable>
+              );
+            })}
           </View>
         ))}
         {isStaff ? (
@@ -319,11 +335,28 @@ function DrawerPanel({ onNavigate }: { onNavigate: () => void }) {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={t('adminPanel')}
-              onPress={() => go('/admin')}
+              onPress={() => go('/(tabs)/admin')}
               style={styles.row}
             >
               <Ionicons name="shield-outline" size={22} color={colors.primary} />
-              <Text style={[styles.rowLabel, { color: colors.primary }]}>{t('adminPanel')}</Text>
+              <Text style={[styles.rowLabel, { color: colors.primary, flex: 1 }]}>{t('adminPanel')}</Text>
+              {(adminBadge.data ?? 0) > 0 ? (
+                <View
+                  style={{
+                    minWidth: 22,
+                    height: 22,
+                    borderRadius: 11,
+                    paddingHorizontal: 6,
+                    backgroundColor: '#E91429',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Text style={{ color: '#fff', fontSize: 11, fontWeight: '900' }}>
+                    {(adminBadge.data ?? 0) > 99 ? '99+' : adminBadge.data}
+                  </Text>
+                </View>
+              ) : null}
             </Pressable>
           </View>
         ) : null}

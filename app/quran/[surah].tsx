@@ -13,6 +13,7 @@ import { useI18nStore, useT } from '@/i18n';
 import { fetchSurah, fetchSurahList, surahFacts, type Ayah } from '@/services/quran';
 import { goQuranHome, openSurah } from '@/services/quran/nav';
 import { playSurahAyah, toggleQuranPlayback, useQuranPlayer } from '@/services/quran/playback';
+import { openStudioRecord } from '@/services/studio/nav';
 import { useReadingStore } from '@/stores/readingStore';
 
 export default function SurahScreen() {
@@ -31,14 +32,16 @@ export default function SurahScreen() {
   const [follow, setFollow] = useState(true);
   const listRef = useRef<FlatList<Ayah>>(null);
   const jumped = useRef(false);
-  const player = useQuranPlayer();
+  const surahNumber = useQuranPlayer((state) => state.surahNumber);
+  const ayahInSurah = useQuranPlayer((state) => state.ayahInSurah);
+  const playing = useQuranPlayer((state) => state.playing);
   const pair = coverFor(Number.isFinite(number) ? number : 0);
   const list = useQuery({ queryKey: ['surahs', locale], queryFn: () => fetchSurahList(locale), staleTime: 60_000 });
   const summary = list.data?.find((item) => item.number === number);
   const query = useQuery({ queryKey: ['surah', number, locale], queryFn: () => fetchSurah(number, locale), enabled: Number.isFinite(number) });
-  const listening = player.surahNumber === number;
+  const listening = surahNumber === number;
   const title = summary ? `${summary.number}. ${summary.englishNameTranslation}` : t('surahTitle', { number });
-  const currentIndex = (query.data ?? []).findIndex((item) => listening && player.ayahInSurah === item.numberInSurah);
+  const currentIndex = (query.data ?? []).findIndex((item) => listening && ayahInSurah === item.numberInSurah);
 
   async function play(globalNumber: number) {
     if (!query.data) return;
@@ -68,17 +71,17 @@ export default function SurahScreen() {
     listRef.current?.scrollToIndex({ index: currentIndex, viewPosition: 0.28, animated: true });
   }, [currentIndex, follow, mode]);
 
-  const followed = useRef(player.surahNumber === number);
+  const followed = useRef(surahNumber === number);
 
   useEffect(() => {
-    if (player.surahNumber === number) followed.current = true;
-  }, [player.surahNumber, number]);
+    if (surahNumber === number) followed.current = true;
+  }, [surahNumber, number]);
 
   useEffect(() => {
-    if (!followed.current || !player.surahNumber || player.surahNumber === number) return;
+    if (!followed.current || !surahNumber || surahNumber === number) return;
     followed.current = false;
-    openSurah(player.surahNumber, player.ayahInSurah ?? 1, { replace: true });
-  }, [player.ayahInSurah, player.surahNumber, number]);
+    openSurah(surahNumber, ayahInSurah ?? 1, { replace: true });
+  }, [ayahInSurah, surahNumber, number]);
 
   useEffect(() => {
     jumped.current = false;
@@ -100,7 +103,7 @@ export default function SurahScreen() {
         data={query.data ?? []}
         keyExtractor={(item) => String(item.number)}
         contentContainerStyle={{ paddingBottom: 140 }}
-        extraData={{ mode, player, fontSize, mealSize }}
+        extraData={{ mode, ayahInSurah, playing, fontSize, mealSize }}
         onScrollBeginDrag={() => {
           if (mode === 'lyrics') setFollow(false);
         }}
@@ -131,12 +134,26 @@ export default function SurahScreen() {
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                 <RoundIcon name={mode === 'tracks' ? 'list' : 'list-outline'} label={t('trackList')} color={mode === 'tracks' ? ink.text : ink.muted} onPress={() => setMode('tracks')} />
                 <RoundIcon name="text" label={t('meanings')} color={mode === 'lyrics' ? ink.green : ink.muted} onPress={() => setMode('lyrics')} />
+                <RoundIcon
+                  name="mic-outline"
+                  label={t('studioRecordSurah')}
+                  color={ink.green}
+                  onPress={() =>
+                    openStudioRecord({
+                      contentType: 'quran',
+                      surah: number,
+                      ayahStart: 1,
+                      ayahEnd: query.data?.length ?? 1,
+                      title: title,
+                    })
+                  }
+                />
                 <Pressable onPress={() => setFontSize(fontSize - 2)} accessibilityLabel={t('arabicSize')}><Text style={{ color: ink.text, fontWeight: '800' }}>A-</Text></Pressable>
                 <Pressable onPress={() => setFontSize(fontSize + 2)} accessibilityLabel={t('arabicSize')}><Text style={{ color: ink.text, fontWeight: '800' }}>A+</Text></Pressable>
                 <Pressable onPress={() => setMealSize(mealSize - 1)} accessibilityLabel={t('mealSize')}><Text style={{ color: ink.muted, fontWeight: '800' }}>a-</Text></Pressable>
                 <Pressable onPress={() => setMealSize(mealSize + 1)} accessibilityLabel={t('mealSize')}><Text style={{ color: ink.muted, fontWeight: '800' }}>a+</Text></Pressable>
               </View>
-              <PlayFab playing={listening && player.playing} onPress={listen} />
+              <PlayFab playing={listening && playing} onPress={listen} />
             </View>
             <AutoNextSurahToggle />
             <ContinueSpanPicker />
@@ -146,7 +163,7 @@ export default function SurahScreen() {
         }
         ListFooterComponent={<Text style={{ color: ink.dim, marginHorizontal: 16, marginTop: 16, fontSize: 12, lineHeight: 18 }}>{t('quranLicense')}</Text>}
         renderItem={({ item, index }) => {
-          const current = listening && player.ayahInSurah === item.numberInSurah;
+          const current = listening && ayahInSurah === item.numberInSurah;
           if (mode === 'lyrics') {
             const distance = currentIndex < 0 ? 2 : index - currentIndex;
             const meaning = item.translation ?? t('mealUnavailable');
@@ -167,7 +184,7 @@ export default function SurahScreen() {
               title={t('playbackAyah', { number: item.numberInSurah })}
               subtitle={(item.translation ?? item.text).replace(/\s+/g, ' ').slice(0, 90)}
               active={current}
-              playing={current && player.playing}
+              playing={current && playing}
               onPress={() => void play(item.number)}
             />
           );

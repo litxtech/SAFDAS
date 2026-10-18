@@ -15,7 +15,7 @@ export type PlayableTrack = {
   uri: string;
   title: string;
   artist: string;
-  kind: 'quran' | 'dua';
+  kind: 'quran' | 'dua' | 'studio';
   surahNumber?: number;
   ayahInSurah?: number;
   ayahNumber?: number;
@@ -25,6 +25,8 @@ export type PlayableTrack = {
   /** Used to re-resolve Qur’an reciter audio when the dua voice changes. */
   duaArabic?: string | null;
   categoryNumber?: string | null;
+  studioRecordingId?: string;
+  artworkUrl?: string;
 };
 
 type EngineState = {
@@ -63,9 +65,23 @@ let artworkUrl: string | null = null;
 let onQuranEdge: ((direction: -1 | 1, reason: QuranEdgeReason) => Promise<boolean>) | null = null;
 let resolveTrackUri: ((track: PlayableTrack) => string) | null = null;
 let statusSub: { remove: () => void } | null = null;
-/** Prefetch next ayah this many seconds before the current one ends. */
-const WARM_LEAD_SEC = 3.5;
-const STATUS_INTERVAL_MS = 100;
+/** True while we intend to play — retries play() once the source finishes loading (fixes first-tap no-op). */
+let wantPlaying = false;
+/** Prefetch next ayah this far before the current one ends (also warmed on start). */
+const WARM_LEAD_SEC = 6;
+/** Start next ayah slightly before current ends so the file-boundary silence disappears. */
+const EARLY_HANDOFF_SEC = 0.12;
+const STATUS_INTERVAL_MS = 80;
+
+function kickPlay(target: AudioPlayer | null = player) {
+  if (!target) return;
+  wantPlaying = true;
+  try {
+    target.play();
+  } catch {
+    /* load may still be in flight — onStatus will retry */
+  }
+}
 
 const MAX_RETRIES = 2;
 const RETRY_BASE_MS = 280;
@@ -132,7 +148,7 @@ async function artwork() {
 
 async function showLockScreen(track: PlayableTrack) {
   if (!player) return;
-  const cover = await artwork().catch(() => null);
+  const cover = track.artworkUrl ?? (await artwork().catch(() => null));
   player.setActiveForLockScreen(
     true,
     { title: track.title, artist: track.artist, albumTitle: 'SAFDAŞ', artworkUrl: cover ?? undefined },
@@ -184,13 +200,18 @@ function clearWarm() {
   warmUri = null;
 }
 
+function needsNetworkFetch(uri: string) {
+  return /^https?:\/\//i.test(uri);
+}
+
 function createPlayer(uri: string, downloadFirst = false) {
   return createAudioPlayer(
     { uri },
     {
       updateInterval: STATUS_INTERVAL_MS,
       keepAudioSessionActive: backgroundEnabled(),
-      downloadFirst,
+      // Local/offline files play immediately — skip the download-first path.
+      downloadFirst: downloadFirst && needsNetworkFetch(uri),
     },
   );
 }
@@ -203,20 +224,37 @@ function markQuranProgress(track: PlayableTrack) {
 
 function onStatus(status: AudioStatus) {
   useAudioEngine.setState({
-    playing: status.playing,
-    loading: status.isBuffering && !status.playing,
+    playing: status.playing || (wantPlaying && advancing),
+    loading: (status.isBuffering || !status.isLoaded) && wantPlaying && !status.playing,
     currentTime: status.currentTime,
     duration: status.duration,
   });
 
-  // Start downloading/decoding the next ayah before this one ends (gapless).
+  // First tap often calls play() before isLoaded — retry as soon as the source is ready.
+  if (wantPlaying && status.isLoaded && !status.playing && !status.didJustFinish && !advancing && player) {
+    try {
+      player.play();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Warm next ayah as soon as we know duration (not only in the last seconds).
+  if (status.playing && !status.didJustFinish && status.duration > 0) {
+    const nearEnd = status.currentTime >= Math.max(0.15, status.duration - WARM_LEAD_SEC);
+    if (nearEnd || status.currentTime < 0.35) void warmNext();
+  }
+
+  // Cut to the next ayah slightly early while warm is ready — removes the file-boundary silence.
   if (
+    !advancing &&
+    wantPlaying &&
     status.playing &&
     !status.didJustFinish &&
-    status.duration > 0 &&
-    status.currentTime >= Math.max(0.4, status.duration - WARM_LEAD_SEC)
+    status.duration > 0.45 &&
+    status.currentTime >= status.duration - EARLY_HANDOFF_SEC
   ) {
-    void warmNext();
+    if (tryAdvanceSeamless()) return;
   }
 
   if (!status.didJustFinish || advancing) return;
@@ -224,6 +262,30 @@ function onStatus(status: AudioStatus) {
   void advanceAfterFinish().finally(() => {
     advancing = false;
   });
+}
+
+/** Sync path used from status ticks — must not await. */
+function tryAdvanceSeamless(): boolean {
+  const { repeatMode, index, queue } = useAudioEngine.getState();
+  if (repeatMode === 'one') return false;
+  if (index >= queue.length - 1) return false;
+  const next = queue[index + 1];
+  if (!next?.uri) return false;
+  const uri = trackUri(next);
+  if (!warm || warmUri !== uri) return false;
+  // Only cut early when the next ayah is actually ready — otherwise wait for natural end.
+  try {
+    if (!warm.isLoaded) return false;
+  } catch {
+    return false;
+  }
+  advancing = true;
+  const generation = ++startGeneration;
+  useAudioEngine.setState({ index: index + 1, error: null, currentTime: 0 });
+  const ok = promoteWarmSync(next, generation);
+  if (ok && generation === startGeneration) void warmNext(index + 1);
+  advancing = false;
+  return ok;
 }
 
 async function advanceAfterFinish() {
@@ -234,9 +296,8 @@ async function advanceAfterFinish() {
     return;
   }
   if (index < queue.length - 1) {
-    // Prefer instant warm handoff — no applyMode / lock-screen await in the audio path.
     const next = queue[index + 1];
-    if (next && (await trySeamlessHandoff(next, index + 1))) return;
+    if (next && handoffToTrack(next, index + 1)) return;
     await startAt(index + 1);
     return;
   }
@@ -248,7 +309,20 @@ async function advanceAfterFinish() {
     await startAt(0);
     return;
   }
+  wantPlaying = false;
   useAudioEngine.setState({ playing: false, loading: false });
+}
+
+function handoffToTrack(track: PlayableTrack, index: number): boolean {
+  const uri = trackUri(track);
+  const generation = ++startGeneration;
+  useAudioEngine.setState({ index, error: null, currentTime: 0 });
+  if (warm && warmUri === uri && promoteWarmSync(track, generation)) {
+    if (generation === startGeneration) void warmNext(index);
+    return true;
+  }
+  // Overlap cold start: new player plays while old one is torn down — avoids replace() gap.
+  return overlapColdStart(track, uri, generation, index);
 }
 
 async function warmNext(fromIndex?: number) {
@@ -263,7 +337,7 @@ async function warmNext(fromIndex?: number) {
   if (warmUri === uri && warm) return;
   clearWarm();
   try {
-    // downloadFirst=true so the next ayah is on disk/buffer before this one ends.
+    // Prefetch to disk while current ayah plays — handoff then starts instantly.
     warm = createPlayer(uri, true);
     warmUri = uri;
     warm.volume = 0;
@@ -274,7 +348,28 @@ async function warmNext(fromIndex?: number) {
   }
 }
 
-/** Swap to the preloaded next player immediately — play first, chrome later. */
+/** Silence and release the outgoing player before the next one speaks (prevents dual voices). */
+function retirePlayer(previous: AudioPlayer | null) {
+  if (!previous) return;
+  try {
+    previous.volume = 0;
+  } catch {
+    /* ignore */
+  }
+  try {
+    previous.pause();
+  } catch {
+    /* ignore */
+  }
+  try {
+    previous.clearLockScreenControls();
+  } catch {
+    /* ignore */
+  }
+  setTimeout(() => disposePlayer(previous), 80);
+}
+
+/** Swap to the preloaded next player immediately — silence old first, then play. */
 function promoteWarmSync(track: PlayableTrack, generation: number) {
   const uri = trackUri(track);
   if (!warm || warmUri !== uri) return false;
@@ -282,6 +377,8 @@ function promoteWarmSync(track: PlayableTrack, generation: number) {
   warm = null;
   warmUri = null;
   const previous = player;
+  // Mute/pause previous BEFORE starting next — overlapping play was the dual-voice bug.
+  retirePlayer(previous && previous !== nextPlayer ? previous : null);
   player = nextPlayer;
   try {
     player.volume = 1;
@@ -291,46 +388,46 @@ function promoteWarmSync(track: PlayableTrack, generation: number) {
   }
   bindStatus(player);
   applyRate(player);
-  try {
-    player.play();
-  } catch {
-    return false;
-  }
+  kickPlay(player);
   if (generation !== startGeneration) return true;
   useAudioEngine.setState({ loading: false, playing: true, error: null, currentTime: 0 });
   markQuranProgress(track);
-  if (previous && previous !== player) {
-    try {
-      previous.pause();
-    } catch {
-      /* ignore */
-    }
-    try {
-      previous.clearLockScreenControls();
-    } catch {
-      /* ignore */
-    }
-    setTimeout(() => disposePlayer(previous), 80);
-  }
   void showLockScreen(track);
   return true;
 }
 
-async function trySeamlessHandoff(track: PlayableTrack, index: number) {
-  const uri = trackUri(track);
-  // Prefer a warm (even partially buffered) player — cold replace is what causes the audible gap.
-  if (!warm || warmUri !== uri) return false;
-  const generation = ++startGeneration;
-  useAudioEngine.setState({ index, error: null, currentTime: 0 });
-  if (!promoteWarmSync(track, generation)) return false;
+/** Start next ayah on a fresh player; never leave two audible players alive. */
+function overlapColdStart(track: PlayableTrack, uri: string, generation: number, index: number) {
+  let nextPlayer: AudioPlayer;
+  try {
+    nextPlayer = createPlayer(uri, false);
+  } catch {
+    return false;
+  }
+  const previous = player;
+  retirePlayer(previous && previous !== nextPlayer ? previous : null);
+  player = nextPlayer;
+  try {
+    player.volume = 1;
+    player.loop = false;
+  } catch {
+    /* ignore */
+  }
+  bindStatus(player);
+  applyRate(player);
+  kickPlay(player);
+  if (generation !== startGeneration) return true;
+  useAudioEngine.setState({ loading: true, playing: true, error: null, currentTime: 0 });
+  markQuranProgress(track);
+  void showLockScreen(track);
   if (generation === startGeneration) void warmNext(index);
   return true;
 }
 
 async function startAt(index: number) {
-  const generation = ++startGeneration;
   const track = useAudioEngine.getState().queue[index];
   if (!track?.uri) {
+    wantPlaying = false;
     useAudioEngine.setState({ playing: false, loading: false, error: 'missing-audio' });
     return;
   }
@@ -339,14 +436,11 @@ async function startAt(index: number) {
     (uri, index, list) => Boolean(uri) && list.indexOf(uri) === index,
   );
 
-  // Gapless path: promote warm before any await.
-  useAudioEngine.setState({ index, error: null, currentTime: 0 });
-  if (promoteWarmSync(track, generation)) {
-    if (generation === startGeneration) void warmNext(index);
-    return;
-  }
+  // Gapless path: promote warm / overlap before any await (replace() is what causes the silence).
+  if (handoffToTrack(track, index)) return;
 
-  useAudioEngine.setState({ loading: true });
+  const generation = ++startGeneration;
+  useAudioEngine.setState({ index, error: null, currentTime: 0, loading: true });
 
   try {
     await applyMode();
@@ -358,8 +452,10 @@ async function startAt(index: number) {
       if (generation !== startGeneration) return;
       const uri = uris[Math.min(uriIndex, uris.length - 1)] ?? primaryUri;
       try {
+        if (overlapColdStart(track, uri, generation, index)) return;
+        // Fallback only if overlap could not create a player.
         if (!player) {
-          player = createPlayer(uri, true);
+          player = createPlayer(uri, false);
           bindStatus(player);
         } else {
           player.replace({ uri });
@@ -368,8 +464,8 @@ async function startAt(index: number) {
         player.volume = 1;
         applyRate(player);
         if (generation !== startGeneration) return;
-        player.play();
-        useAudioEngine.setState({ loading: false, playing: true, error: null });
+        kickPlay(player);
+        useAudioEngine.setState({ loading: true, playing: true, error: null });
         markQuranProgress(track);
         void showLockScreen(track);
         if (generation === startGeneration) void warmNext(index);
@@ -386,6 +482,7 @@ async function startAt(index: number) {
       }
     }
 
+    wantPlaying = false;
     useAudioEngine.setState({
       loading: false,
       playing: false,
@@ -393,6 +490,7 @@ async function startAt(index: number) {
     });
   } catch (error) {
     if (generation !== startGeneration) return;
+    wantPlaying = false;
     useAudioEngine.setState({
       loading: false,
       playing: false,
@@ -412,27 +510,33 @@ export async function playQueue(queue: PlayableTrack[], startIndex = 0) {
   }
   const safeIndex = Math.max(0, Math.min(startIndex, playable.length - 1));
   useAudioEngine.setState({ queue: playable, index: safeIndex, error: null, currentTime: 0 });
+  await applyMode();
   await startAt(safeIndex);
 }
 
 export function togglePlayback() {
-  if (!player) return;
-  if (player.playing) {
+  if (!player) {
+    const { queue, index } = useAudioEngine.getState();
+    if (queue[index]?.uri) void startAt(index);
+    return;
+  }
+  if (player.playing || (wantPlaying && useAudioEngine.getState().loading)) {
     pausePlayback();
     return;
   }
   void applyMode().finally(() => {
     if (!player) return;
     applyRate(player);
-    player.play();
+    kickPlay(player);
     useAudioEngine.setState({ playing: true, error: null });
   });
 }
 
 export function pausePlayback() {
   if (!player) return;
+  wantPlaying = false;
   player.pause();
-  useAudioEngine.setState({ playing: false });
+  useAudioEngine.setState({ playing: false, loading: false });
 }
 
 export async function playAdjacent(direction: -1 | 1) {
@@ -486,6 +590,7 @@ export function cyclePlaybackRate() {
 export function stopPlayback() {
   startGeneration += 1;
   advancing = false;
+  wantPlaying = false;
   clearWarm();
   player?.pause();
   player?.clearLockScreenControls();
