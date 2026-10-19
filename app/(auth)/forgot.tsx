@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { Text } from 'react-native';
-import { Screen } from '@/components/layout/Screen';
-import { AppButton } from '@/components/ui/AppButton';
-import { AppInput } from '@/components/ui/AppInput';
+import { AuthCanvas, GlassButton, GlassCard, GlassField } from '@/components/auth/GlassAuth';
+import { authRedirectTo } from '@/lib/authDeepLink';
 import { useT } from '@/i18n';
 import { requireSupabase } from '@/lib/supabase';
 import { useToastStore } from '@/stores/toastStore';
@@ -17,17 +16,21 @@ export default function ForgotScreen() {
 
   async function submit() {
     setLoading(true);
-    const { error } = await requireSupabase().auth.resetPasswordForEmail(email.trim());
+    const { error } = await requireSupabase().auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: authRedirectTo(),
+    });
     setLoading(false);
     if (error) show(error.message, 'error');
     else show(t('resetSent'), 'success');
   }
 
   return (
-    <Screen scroll>
-      <Text style={{ color: colors.text, fontSize: 32, fontWeight: '700' }}>{t('resetPassword')}</Text>
-      <AppInput label={t('email')} autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} />
-      <AppButton label={t('sendLink')} loading={loading} onPress={() => void submit()} />
-    </Screen>
+    <AuthCanvas scroll>
+      <GlassCard>
+        <Text style={{ color: colors.text, fontSize: 34, fontWeight: '700', letterSpacing: -0.8 }}>{t('resetPassword')}</Text>
+        <GlassField label={t('email')} autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} />
+        <GlassButton label={t('sendLink')} loading={loading} onPress={() => void submit()} />
+      </GlassCard>
+    </AuthCanvas>
   );
 }
