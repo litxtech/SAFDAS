@@ -69,9 +69,20 @@ let statusSub: { remove: () => void } | null = null;
 let wantPlaying = false;
 /** Prefetch next ayah this far before the current one ends (also warmed on start). */
 const WARM_LEAD_SEC = 6;
-/** Start next ayah slightly before current ends so the file-boundary silence disappears. */
-const EARLY_HANDOFF_SEC = 0.12;
-const STATUS_INTERVAL_MS = 80;
+/**
+ * Cut to the next ayah slightly early while warm is ready.
+ * Kept ≥ STATUS_INTERVAL so a single tick can still land in the handoff window.
+ */
+const EARLY_HANDOFF_SEC = 0.55;
+/**
+ * Native status cadence. 80ms + dual players heated Android; 250ms still ran warm.
+ * expo-audio docs recommend 500–1000ms for performance.
+ */
+const STATUS_INTERVAL_MS = 500;
+/** Warm/prefetch player does not drive UI — keep its native timer nearly idle. */
+const WARM_STATUS_INTERVAL_MS = 1000;
+/** Skip store clock pushes when the playhead barely moved (cuts React churn). */
+const STORE_TIME_EPSILON_SEC = 0.2;
 
 function kickPlay(target: AudioPlayer | null = player) {
   if (!target) return;
@@ -148,19 +159,27 @@ async function artwork() {
 
 async function showLockScreen(track: PlayableTrack) {
   if (!player) return;
-  const cover = track.artworkUrl ?? (await artwork().catch(() => null));
-  player.setActiveForLockScreen(
-    true,
-    { title: track.title, artist: track.artist, albumTitle: 'SAFDAŞ', artworkUrl: cover ?? undefined },
-    { showSeekForward: true, showSeekBackward: true },
-  );
+  try {
+    const cover = track.artworkUrl ?? (await artwork().catch(() => null));
+    const result = player.setActiveForLockScreen(
+      true,
+      { title: track.title, artist: track.artist, albumTitle: 'SAFDAŞ', artworkUrl: cover ?? undefined },
+      { showSeekForward: true, showSeekBackward: true },
+    );
+    // Android can reject when starting a foreground service from background.
+    await Promise.resolve(result).catch(() => undefined);
+  } catch {
+    // Lock-screen controls are best-effort; playback continues without them.
+  }
 }
 
 function applyRate(target: AudioPlayer | null = player) {
   if (!target) return;
   const rate = useAudioEngine.getState().playbackRate;
+  // 'high' pitch correction is CPU-heavy on Android; only needed when rate ≠ 1.
+  const quality = rate === 1 ? 'low' : 'medium';
   try {
-    target.setPlaybackRate(rate, 'high');
+    target.setPlaybackRate(rate, quality);
   } catch {
     try {
       target.playbackRate = rate;
@@ -204,16 +223,38 @@ function needsNetworkFetch(uri: string) {
   return /^https?:\/\//i.test(uri);
 }
 
-function createPlayer(uri: string, downloadFirst = false) {
+function createPlayer(uri: string, downloadFirst = false, updateInterval = STATUS_INTERVAL_MS) {
   return createAudioPlayer(
     { uri },
     {
-      updateInterval: STATUS_INTERVAL_MS,
+      updateInterval,
       keepAudioSessionActive: backgroundEnabled(),
       // Local/offline files play immediately — skip the download-first path.
       downloadFirst: downloadFirst && needsNetworkFetch(uri),
     },
   );
+}
+
+function pushEngineStatus(status: AudioStatus) {
+  const prev = useAudioEngine.getState();
+  const playing = status.playing || (wantPlaying && advancing);
+  const loading = (status.isBuffering || !status.isLoaded) && wantPlaying && !status.playing;
+  const timeDelta = Math.abs(prev.currentTime - status.currentTime);
+  const durationDelta = Math.abs(prev.duration - status.duration);
+  if (
+    prev.playing === playing &&
+    prev.loading === loading &&
+    timeDelta < STORE_TIME_EPSILON_SEC &&
+    durationDelta < 0.05
+  ) {
+    return;
+  }
+  useAudioEngine.setState({
+    playing,
+    loading,
+    currentTime: status.currentTime,
+    duration: status.duration,
+  });
 }
 
 function markQuranProgress(track: PlayableTrack) {
@@ -223,12 +264,7 @@ function markQuranProgress(track: PlayableTrack) {
 }
 
 function onStatus(status: AudioStatus) {
-  useAudioEngine.setState({
-    playing: status.playing || (wantPlaying && advancing),
-    loading: (status.isBuffering || !status.isLoaded) && wantPlaying && !status.playing,
-    currentTime: status.currentTime,
-    duration: status.duration,
-  });
+  pushEngineStatus(status);
 
   // First tap often calls play() before isLoaded — retry as soon as the source is ready.
   if (wantPlaying && status.isLoaded && !status.playing && !status.didJustFinish && !advancing && player) {
@@ -239,10 +275,10 @@ function onStatus(status: AudioStatus) {
     }
   }
 
-  // Warm next ayah as soon as we know duration (not only in the last seconds).
+  // Warm next ayah only in the lead window — avoids a second decoder for most of the track.
   if (status.playing && !status.didJustFinish && status.duration > 0) {
     const nearEnd = status.currentTime >= Math.max(0.15, status.duration - WARM_LEAD_SEC);
-    if (nearEnd || status.currentTime < 0.35) void warmNext();
+    if (nearEnd) void warmNext();
   }
 
   // Cut to the next ayah slightly early while warm is ready — removes the file-boundary silence.
@@ -338,7 +374,8 @@ async function warmNext(fromIndex?: number) {
   clearWarm();
   try {
     // Prefetch to disk while current ayah plays — handoff then starts instantly.
-    warm = createPlayer(uri, true);
+    // Low status cadence: warm never binds a listener, but Android still runs the timer.
+    warm = createPlayer(uri, true, WARM_STATUS_INTERVAL_MS);
     warmUri = uri;
     warm.volume = 0;
     warm.loop = false;

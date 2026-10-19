@@ -140,10 +140,17 @@ export default function HomeScreen() {
   const { width: screenWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [tab, setTab] = useState<'discover' | 'following'>('discover');
+  // Let feed win the first network slot — prayer hero can fill in a beat later.
+  const [prayerReady, setPrayerReady] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setPrayerReady(true), 450);
+    return () => clearTimeout(timer);
+  }, []);
 
   const prayer = useQuery({
     queryKey: ['prayer-month', location.city, location.countryCode, methodId, location.latitude],
     queryFn: () => loadPrayerMonth({ location, methodId }),
+    enabled: prayerReady,
     staleTime: 30 * 60_000,
   });
 
@@ -189,16 +196,28 @@ export default function HomeScreen() {
   useEffect(() => {
     const realtime = supabase;
     if (!realtime || !userId) return;
-    const channel = realtime
-      .channel(`feed:${userId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'post_likes' }, () => {
+    // Defer realtime so the first feed fetch isn't competing for the JS thread.
+    let channel: ReturnType<typeof realtime.channel> | null = null;
+    let softTimer: ReturnType<typeof setTimeout> | null = null;
+    const softInvalidate = () => {
+      if (softTimer) return;
+      softTimer = setTimeout(() => {
+        softTimer = null;
         void client.invalidateQueries({ queryKey: ['feed'] });
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'posts' }, () => {
-        void client.invalidateQueries({ queryKey: ['feed'] });
-      })
-      .subscribe();
-    return () => { void realtime.removeChannel(channel); };
+      }, 2_500);
+    };
+    const timer = setTimeout(() => {
+      channel = realtime
+        .channel(`feed:${userId}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'post_likes' }, softInvalidate)
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'posts' }, softInvalidate)
+        .subscribe();
+    }, 1200);
+    return () => {
+      clearTimeout(timer);
+      if (softTimer) clearTimeout(softTimer);
+      if (channel) void realtime.removeChannel(channel);
+    };
   }, [client, userId]);
 
   const today = new Date().toISOString().slice(0, 10);

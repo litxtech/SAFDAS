@@ -187,7 +187,7 @@ export function DrawerHost({ children }: { children: React.ReactNode }) {
           pointerEvents={chrome.touchable ? 'auto' : 'none'}
           style={[styles.drawer, rtl ? { right: 0 } : { left: 0 }, { width: reveal }]}
         >
-          <DrawerPanel onNavigate={api.close} />
+          <DrawerPanel visible={chrome.open} onNavigate={api.close} />
         </View>
         <GestureDetector gesture={pan}>
           <Animated.View style={[styles.sheet, sheetStyle]}>
@@ -204,7 +204,7 @@ export function DrawerHost({ children }: { children: React.ReactNode }) {
   );
 }
 
-function DrawerPanel({ onNavigate }: { onNavigate: () => void }) {
+function DrawerPanel({ visible, onNavigate }: { visible: boolean; onNavigate: () => void }) {
   const { colors, name, reduceMotion } = useTheme();
   const t = useT();
   const insets = useSafeAreaInsets();
@@ -212,8 +212,8 @@ function DrawerPanel({ onNavigate }: { onNavigate: () => void }) {
   const isStaff = useAuthStore((state) => state.isStaff);
   const adminBadge = useQuery({
     queryKey: ['admin-badge'],
-    enabled: isStaff,
-    refetchInterval: 30_000,
+    enabled: isStaff && visible,
+    refetchInterval: visible ? 30_000 : false,
     queryFn: async () => {
       const { fetchAdminBadgeTotal } = await import('@/services/admin/alerts');
       return fetchAdminBadgeTotal();

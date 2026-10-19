@@ -1,3 +1,4 @@
+import 'react-native-get-random-values';
 import 'react-native-url-polyfill/auto';
 import '@/lib/domExceptionPolyfill';
 import { useEffect } from 'react';
@@ -21,20 +22,43 @@ export default function RootLayout() {
 
   useEffect(() => {
     void bootstrapLocaleOnce();
-    // Native / offline work after first paint — not on the critical path.
-    const timer = setTimeout(() => {
-      void import('@/lib/livekitBootstrap').then((mod) => {
-        mod.bootstrapLiveKit();
-      });
-      void import('@/services/offline/packs').then((mod) => {
-        try {
-          mod.refreshPackStats();
-        } catch {
-          /* web / missing FS */
-        }
-      });
-    }, 0);
-    return () => clearTimeout(timer);
+    let stopNetwork: (() => void) | undefined;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
+    // Light work right after first paint.
+    timers.push(
+      setTimeout(() => {
+        void import('@/stores/networkStore').then((mod) => {
+          stopNetwork = mod.startNetworkMonitoring();
+        });
+      }, 0),
+    );
+    // Audio URI binding — needed before MiniPlayer, not for first paint.
+    timers.push(
+      setTimeout(() => {
+        void import('@/services/audio/bindUriResolver').then((mod) => {
+          mod.bindAudioUriResolver();
+        });
+      }, 600),
+    );
+    // Offline pack stats — UI-only counters, defer.
+    timers.push(
+      setTimeout(() => {
+        void import('@/services/offline/packs').then((mod) => {
+          try {
+            mod.refreshPackStats();
+          } catch {
+            /* web / missing FS */
+          }
+        });
+      }, 2200),
+    );
+    // LiveKit globals bootstrap on call/live/rooms entry — not at cold start.
+
+    return () => {
+      timers.forEach(clearTimeout);
+      stopNetwork?.();
+    };
   }, []);
 
   return (
