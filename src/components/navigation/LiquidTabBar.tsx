@@ -1,118 +1,228 @@
-import { useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useContext, useEffect, useState } from 'react';
+import { Keyboard, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useQuery } from '@tanstack/react-query';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
-import { router, type Href } from 'expo-router';
-import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import { router } from 'expo-router';
+import { BottomTabBarHeightCallbackContext, type BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AppBottomSheet } from '@/components/ui/AppBottomSheet';
-import { useT, type I18nKey } from '@/i18n';
+import { AppAvatar } from '@/components/ui/AppAvatar';
+import { useT } from '@/i18n';
+import { fetchInbox, unreadInboxTotal } from '@/services/social';
 import { useAuthStore } from '@/stores/authStore';
 import { useTheme } from '@/theme/ThemeProvider';
 
-const ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
+/** Instagram benzeri içerik yüksekliği (home indicator hariç) */
+const BAR_H = 50;
+
+const OUTLINE: Record<string, keyof typeof Ionicons.glyphMap> = {
   index: 'home-outline',
-  worship: 'moon-outline',
-  create: 'add',
+  create: 'add-circle-outline',
   messages: 'chatbubble-ellipses-outline',
   profile: 'person-outline',
-  admin: 'shield-outline',
 };
 
-const CREATE_OPTIONS: { label: I18nKey; href: Href; icon: keyof typeof Ionicons.glyphMap }[] = [
-  { label: 'createPostMenu', href: '/post/create', icon: 'create-outline' },
-  { label: 'sharePhoto', href: { pathname: '/post/create', params: { type: 'photo' } }, icon: 'image-outline' },
-  { label: 'shareVideo', href: { pathname: '/post/create', params: { type: 'video' } }, icon: 'videocam-outline' },
-  { label: 'shareAyah', href: { pathname: '/post/create', params: { type: 'ayah' } }, icon: 'book-outline' },
-  { label: 'shareDua', href: { pathname: '/post/create', params: { type: 'dua' } }, icon: 'heart-outline' },
-];
+const FILLED: Record<string, keyof typeof Ionicons.glyphMap> = {
+  index: 'home',
+  create: 'add-circle',
+  messages: 'chatbubble-ellipses',
+  profile: 'person',
+};
 
 export function LiquidTabBar({ state, navigation }: BottomTabBarProps) {
   const { colors, name } = useTheme();
   const t = useT();
   const insets = useSafeAreaInsets();
-  const isStaff = useAuthStore((store) => store.isStaff);
-  const [open, setOpen] = useState(false);
+  const onHeightChange = useContext(BottomTabBarHeightCallbackContext);
+  const profile = useAuthStore((s) => s.profile);
+  const userId = useAuthStore((s) => s.session?.user.id);
+  const [keyboard, setKeyboard] = useState(false);
+  // Share the inbox query with the messages tab so opening chats is instant after first warm.
+  const unread = useQuery({
+    queryKey: ['conversations', userId],
+    enabled: Boolean(userId),
+    queryFn: () => fetchInbox(userId as string),
+    select: unreadInboxTotal,
+    refetchInterval: 60_000,
+  });
+
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboard(true));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboard(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
+  // Navigatör bottom:0 — gerçek home indicator burada
+  const bottom = insets.bottom;
+  const height = BAR_H + bottom;
+
+  useEffect(() => {
+    onHeightChange?.(keyboard ? 0 : height);
+  }, [height, keyboard, onHeightChange]);
+
   const labels: Record<string, string> = {
     index: t('home'),
-    worship: t('worship'),
     create: t('share'),
     messages: t('messages'),
     profile: t('profile'),
-    admin: t('admin'),
   };
-  const routes = state.routes.filter((route) => (isStaff ? route.name !== 'create' : route.name !== 'admin'));
+
+  const routes = state.routes.filter((r) => r.name !== 'admin');
+  const dark = name === 'dark';
+
+  // iOS UITabBar: buzlu cam — blur baskın, yıkama çok hafif
+  const wash = dark ? 'rgba(22, 22, 24, 0.28)' : 'rgba(248, 249, 252, 0.22)';
+  const line = dark ? 'rgba(255, 255, 255, 0.14)' : 'rgba(60, 60, 67, 0.18)';
+  const on = colors.primary;
+  const off = dark ? '#A8A8A8' : '#8E8E8E';
+  const blurTint = dark
+    ? Platform.OS === 'ios'
+      ? 'systemChromeMaterialDark'
+      : 'dark'
+    : Platform.OS === 'ios'
+      ? 'systemChromeMaterialLight'
+      : 'light';
+  const blurIntensity = Platform.OS === 'ios' ? 80 : 70;
+
+  if (keyboard) return null;
 
   return (
-    <>
-      <View pointerEvents="box-none" style={[styles.wrap, { bottom: Math.max(insets.bottom, 10) }]}>
-        <View style={[styles.bar, { borderColor: colors.tabBarBorder, backgroundColor: colors.tabBar }]}>
-          <BlurView intensity={Platform.OS === 'ios' ? 48 : 18} tint={name === 'dark' ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
-          {routes.map((route) => {
-            const focused = state.routes[state.index]?.key === route.key;
-            const isCreate = route.name === 'create';
-            const color = focused ? colors.primary : colors.iconMuted;
-            const outline = ICONS[route.name] ?? 'ellipse-outline';
-            const iconName = (focused ? outline.replace('-outline', '') : outline) as keyof typeof Ionicons.glyphMap;
-            return (
-              <Pressable
-                key={route.key}
-                accessibilityRole="button"
-                accessibilityLabel={labels[route.name] ?? route.name}
-                onPress={() => {
-                  if (isCreate) {
-                    setOpen(true);
-                    return;
-                  }
+    <View
+      style={[styles.root, { height, backgroundColor: dark ? '#161618' : '#F8F9FC' }]}
+      onLayout={(e) => onHeightChange?.(e.nativeEvent.layout.height)}
+    >
+      {/* Tek katman buz — altta ayrı kart/şerit yok */}
+      <BlurView
+        intensity={blurIntensity}
+        tint={blurTint}
+        experimentalBlurMethod="dimezisBlurView"
+        style={StyleSheet.absoluteFill}
+      />
+      <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: wash }]} />
+      <View pointerEvents="none" style={[styles.hairline, { backgroundColor: line }]} />
+
+      <View style={[styles.tabs, { height: BAR_H, paddingBottom: 0 }]}>
+        {routes.map((route) => {
+          const focused = state.routes[state.index]?.key === route.key;
+          const isCreate = route.name === 'create';
+          const isProfile = route.name === 'profile';
+          const color = focused ? on : off;
+
+          return (
+            <Pressable
+              key={route.key}
+              accessibilityRole="button"
+              accessibilityState={{ selected: focused }}
+              accessibilityLabel={labels[route.name] ?? route.name}
+              hitSlop={6}
+              onPress={() => {
+                if (isCreate) {
+                  router.push('/post/create');
+                  return;
+                }
+                const event = navigation.emit({
+                  type: 'tabPress',
+                  target: route.key,
+                  canPreventDefault: true,
+                });
+                if (!focused && !event.defaultPrevented) {
                   navigation.navigate(route.name);
-                }}
-                style={styles.item}
-              >
-                {isCreate ? (
-                  <View style={[styles.share, { backgroundColor: colors.primary }]}>
-                    <Ionicons name="add" size={28} color={colors.onPrimary} />
-                  </View>
-                ) : (
-                  <>
-                    <Ionicons name={iconName} size={22} color={color} />
-                    <Text style={{ color, fontSize: 11, fontWeight: '600' }}>{labels[route.name]}</Text>
-                  </>
-                )}
-              </Pressable>
-            );
-          })}
-        </View>
+                }
+              }}
+              style={({ pressed }) => [styles.tab, pressed && { opacity: 0.55 }]}
+            >
+              {isProfile ? (
+                <View style={[styles.avatarRing, focused && { borderColor: on }]}>
+                  <AppAvatar uri={profile?.avatar_url} name={profile?.display_name} size={26} />
+                </View>
+              ) : (
+                <View>
+                  <Ionicons
+                    name={focused ? FILLED[route.name] ?? 'ellipse' : OUTLINE[route.name] ?? 'ellipse-outline'}
+                    size={26}
+                    color={color}
+                  />
+                  {route.name === 'messages' && (unread.data ?? 0) > 0 ? (
+                    <View style={[styles.dot, { backgroundColor: colors.primary, borderColor: dark ? '#161618' : '#F8F9FC' }]}>
+                      {(unread.data ?? 0) > 9 ? null : (
+                        <Text style={styles.dotText}>{unread.data}</Text>
+                      )}
+                    </View>
+                  ) : null}
+                </View>
+              )}
+              <Text style={[styles.label, { color }]} numberOfLines={1}>
+                {labels[route.name]}
+              </Text>
+            </Pressable>
+          );
+        })}
       </View>
-      <AppBottomSheet visible={open} title={t('share')} onClose={() => setOpen(false)}>
-        {CREATE_OPTIONS.map((option) => (
-          <Pressable
-            key={option.label}
-            style={styles.option}
-            onPress={() => {
-              setOpen(false);
-              router.push(option.href);
-            }}
-          >
-            <Ionicons name={option.icon} size={20} color={colors.primary} />
-            <Text style={{ color: colors.text, fontSize: 16, fontWeight: '600' }}>{t(option.label)}</Text>
-          </Pressable>
-        ))}
-      </AppBottomSheet>
-    </>
+
+      <View style={{ height: bottom }} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { position: 'absolute', left: 16, right: 16 },
-  bar: {
-    height: 68,
-    borderRadius: 28,
-    borderWidth: StyleSheet.hairlineWidth,
+  root: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
     overflow: 'hidden',
+    zIndex: 40,
+    elevation: 40,
+    margin: 0,
+    padding: 0,
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
+  },
+  hairline: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: StyleSheet.hairlineWidth,
+    zIndex: 2,
+  },
+  tabs: {
     flexDirection: 'row',
     alignItems: 'center',
   },
-  item: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2, minHeight: 48 },
-  share: { width: 52, height: 52, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginTop: -18 },
-  option: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 48 },
+  tab: {
+    flex: 1,
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    minWidth: 44,
+  },
+  label: {
+    fontSize: 10,
+    fontWeight: '500',
+    letterSpacing: 0.1,
+  },
+  avatarRing: {
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+    padding: 1,
+  },
+  dot: {
+    position: 'absolute',
+    top: -3,
+    right: -8,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    paddingHorizontal: 3,
+  },
+  dotText: { color: '#fff', fontSize: 9, fontWeight: '700' },
 });

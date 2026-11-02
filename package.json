@@ -4,12 +4,14 @@
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
-    "start": "expo start",
+    "start": "node --max-old-space-size=8192 ./node_modules/expo/bin/cli start --dev-client",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "compare:prayer": "node scripts/compare-prayer-times.mjs"
+    "compare:prayer": "node scripts/compare-prayer-times.mjs",
+    "start:tunnel": "node --max-old-space-size=8192 ./node_modules/expo/bin/cli start --dev-client --tunnel",
+    "start:clear": "node --max-old-space-size=8192 ./node_modules/expo/bin/cli start --dev-client --clear"
   },
   "dependencies": {
     "@bacons/apple-targets": "^5.0.0",

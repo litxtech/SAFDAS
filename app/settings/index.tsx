@@ -4,6 +4,7 @@ import { Screen } from '@/components/layout/Screen';
 import { AppButton } from '@/components/ui/AppButton';
 import { AppHeader } from '@/components/ui/AppHeader';
 import { LinkRow } from '@/components/ui/LinkRow';
+import { setPendingSignupEmail } from '@/lib/pendingSignup';
 import { requireSupabase } from '@/lib/supabase';
 import { useT } from '@/i18n';
 import { useAuthStore } from '@/stores/authStore';
@@ -17,16 +18,20 @@ export default function SettingsScreen() {
   const session = useAuthStore((state) => state.session);
 
   async function signOut() {
+    setPendingSignupEmail(null);
     await requireSupabase().auth.signOut();
-    router.replace('/');
+    router.replace('/(auth)/welcome');
   }
 
   async function removeAccount() {
-    const { error } = await requireSupabase().functions.invoke('delete-account');
+    const client = requireSupabase();
+    const { error } = await client.functions.invoke('delete-account');
     if (error) show(t('accountDeleteUnavailable'), 'error');
     else {
+      setPendingSignupEmail(null);
+      await client.auth.signOut({ scope: 'local' });
       show(t('accountDeleteRequested'), 'success');
-      router.replace('/');
+      router.replace('/(auth)/welcome');
     }
   }
 
@@ -36,6 +41,7 @@ export default function SettingsScreen() {
       <LinkRow icon="color-palette-outline" label={t('theme')} hint={`${t('themeLight')} · ${t('themeDark')}`} onPress={() => router.push('/settings/theme')} />
       <LinkRow icon="time-outline" label={t('prayerMethod')} onPress={() => router.push('/settings/prayer')} />
       <LinkRow icon="language-outline" label={t('language')} hint={t('languageHint')} onPress={() => router.push('/settings/language')} />
+      <LinkRow icon="cloud-download-outline" label={t('offlineDownloads')} hint={t('offlineDownloadsHint')} onPress={() => router.push('/settings/downloads')} />
       <LinkRow icon="notifications-outline" label={t('backgroundTitle')} hint={t('notifications')} onPress={() => router.push('/settings/notifications')} />
       <LinkRow icon="lock-closed-outline" label={t('privacy')} onPress={() => router.push('/settings/privacy')} />
       <LinkRow icon="shield-checkmark-outline" label={t('security')} onPress={() => router.push('/settings/security')} />

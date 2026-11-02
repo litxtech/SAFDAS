@@ -15,3 +15,11 @@ web-build/
 npm-debug.*
 .metro-health-check*
 expo-env.d.ts
+
+# Firebase / FCM secrets — never commit service account keys
+*-firebase-adminsdk*.json
+*firebase-adminsdk*.json
+
+
+.local/
+
