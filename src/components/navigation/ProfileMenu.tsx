@@ -15,6 +15,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppUsageBadge } from '@/components/usage/AppUsageBadge';
+import { MembershipRightsCard } from '@/components/membership/MembershipRightsCard';
 import { useT, type I18nKey } from '@/i18n';
 import { setPendingSignupEmail } from '@/lib/pendingSignup';
 import { requireSupabase } from '@/lib/supabase';
@@ -53,9 +54,12 @@ type MenuItem = {
 };
 
 const ITEMS: MenuItem[] = [
+  { title: 'nasipSubscriptionMenu', icon: 'sparkles-outline', href: '/nasip/subscription' },
+  { title: 'jobsSubscriptionMenu', icon: 'card-outline', href: '/jobs/subscription' },
   { title: 'editProfile', icon: 'create-outline', href: '/profile/edit' },
   { title: 'shareProfile', icon: 'share-outline', action: 'share' },
   { title: 'saved', icon: 'bookmark-outline', href: '/saved' },
+  { title: 'hiddenPosts', icon: 'eye-off-outline', href: '/hidden' },
   { title: 'settings', icon: 'settings-outline', href: '/settings' },
   { title: 'admin', icon: 'shield-outline', href: '/admin', staffOnly: true },
   { title: 'signOut', icon: 'log-out-outline', action: 'signOut', danger: true },
@@ -190,6 +194,11 @@ function ProfileMenuPanel({ onNavigate }: { onNavigate: () => void }) {
     router.navigate(href);
   }
 
+  function openMembership() {
+    onNavigate();
+    router.push('/membership');
+  }
+
   async function share() {
     onNavigate();
     if (!profile?.id) return;
@@ -237,6 +246,7 @@ function ProfileMenuPanel({ onNavigate }: { onNavigate: () => void }) {
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
         <Text style={[styles.heading, { color: colors.text }]}>{t('profile')}</Text>
         <AppUsageBadge variant="card" />
+        <MembershipRightsCard onNavigate={openMembership} />
         <View style={styles.block}>
           {visible.map((item, index) => (
             <Pressable
