@@ -2,14 +2,22 @@ import { useCallback, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Image } from 'expo-image';
 import { router, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen } from '@/components/layout/Screen';
+import { MembershipTick } from '@/components/membership/MembershipTick';
 import { ProfileMenuHost, useProfileMenu } from '@/components/navigation/ProfileMenu';
+import {
+  ProfileActionButton,
+  ProfileAvatarRing,
+  ProfileChip,
+  ProfileCover,
+  ProfileIconButton,
+  ProfileSegmentedTabs,
+  ProfileStatCard,
+} from '@/components/profile/ProfileKit';
 import { ProfilePostGrid } from '@/components/profile/ProfilePostGrid';
-import { AppAvatar } from '@/components/ui/AppAvatar';
-import { AppTabs } from '@/components/ui/AppTabs';
+import { ProfileLocationPicker } from '@/components/profile/ProfileLocationPicker';
 import { ImageLightbox } from '@/components/ui/ImageLightbox';
 import { requireSupabase } from '@/lib/supabase';
 import { isVideoMedia } from '@/services/media';
@@ -18,9 +26,9 @@ import { fetchOwnerRecordings } from '@/services/studio/api';
 import { openStudioDetail, openStudioLibrary } from '@/services/studio/nav';
 import { useT } from '@/i18n';
 import { useAuthStore } from '@/stores/authStore';
-import { useLocationPickStore } from '@/stores/locationPickStore';
 import { useToastStore } from '@/stores/toastStore';
 import { useTheme } from '@/theme/ThemeProvider';
+import { spacing } from '@/theme/tokens';
 
 export default function ProfileScreen() {
   return (
@@ -31,7 +39,7 @@ export default function ProfileScreen() {
 }
 
 function ProfileBody() {
-  const { colors, name } = useTheme();
+  const { colors } = useTheme();
   const t = useT();
   const menu = useProfileMenu();
   const profile = useAuthStore((state) => state.profile);
@@ -41,26 +49,10 @@ function ProfileBody() {
   const [tab, setTab] = useState('posts');
   const [coverOpen, setCoverOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
+  const [locationOpen, setLocationOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
 
-  useFocusEffect(
-    useCallback(() => {
-      if (!profile || useLocationPickStore.getState().owner !== 'profile' || !useLocationPickStore.getState().result) return;
-      const place = useLocationPickStore.getState().take('profile');
-      if (!place) return;
-      const patch = { city: place.city, country: place.countryName };
-      setProfile({ ...profile, ...patch });
-      void requireSupabase()
-        .from('profiles')
-        .update(patch)
-        .eq('id', profile.id)
-        .then(({ error }) => {
-          if (error) show(error.message, 'error');
-          else show(t('locationUpdated'), 'success');
-        });
-    }, [profile, setProfile, show, t]),
-  );
   const posts = useQuery({
     queryKey: ['author-posts', userId, userId],
     enabled: Boolean(userId),
@@ -93,129 +85,161 @@ function ProfileBody() {
     },
   });
 
+  const initial = (profile?.display_name ?? profile?.username ?? '?').trim().charAt(0).toUpperCase();
+  const placeLabel = [profile?.city, profile?.country].filter(Boolean).join(', ') || t('chooseLocation');
+  const applyLocation = (place: { countryCode: string; countryName: string; cityName: string }) => {
+    setLocationOpen(false);
+    if (!profile) return;
+    const patch = { city: place.cityName, country: place.countryName };
+    setProfile({ ...profile, ...patch });
+    void requireSupabase()
+      .from('profiles')
+      .update(patch)
+      .eq('id', profile.id)
+      .then(({ error }) => {
+        if (error) show(error.message, 'error');
+        else show(t('locationUpdated'), 'success');
+      });
+    // Keep the private country code in sync so NASİP can prefill reliably.
+    void requireSupabase()
+      .from('profile_private')
+      .upsert({ user_id: profile.id, country_code: place.countryCode || null }, { onConflict: 'user_id' });
+  };
+
   return (
     <Screen scroll tabBar padded={false} bleedTop>
-      <View style={{ height: 196 + insets.top, backgroundColor: colors.primaryDark }}>
-        {profile?.cover_url ? (
-          <Pressable
-            accessibilityRole="imagebutton"
-            accessibilityLabel={t('cover')}
-            onPress={() => setCoverOpen(true)}
-            style={StyleSheet.absoluteFillObject}
-          >
-            <Image source={{ uri: profile.cover_url }} style={{ width: '100%', height: '100%' }} contentFit="cover" contentPosition="top" />
-          </Pressable>
-        ) : null}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={t('moreActions')}
-          onPress={menu.open}
-          style={[
-            styles.menuBtn,
-            {
-              top: insets.top + 8,
-              backgroundColor: name === 'dark' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.86)',
-            },
-          ]}
-        >
-          <Ionicons name="menu-outline" size={22} color={colors.text} />
-        </Pressable>
-      </View>
+      <ProfileCover
+        uri={profile?.cover_url}
+        initial={initial}
+        height={252 + insets.top}
+        onPress={() => setCoverOpen(true)}
+        accessibilityLabel={t('cover')}
+      >
+        <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+          <View style={styles.topBarSpacer} />
+          <ProfileIconButton icon="menu-outline" label={t('moreActions')} onPress={menu.open} />
+        </View>
+      </ProfileCover>
       <ImageLightbox uri={profile?.cover_url} visible={coverOpen} onClose={() => setCoverOpen(false)} accessibilityLabel={t('cover')} />
       <ImageLightbox uri={profile?.avatar_url} visible={avatarOpen} onClose={() => setAvatarOpen(false)} accessibilityLabel={t('avatar')} />
-      <View style={{ paddingHorizontal: 16, marginTop: -36, gap: 12 }}>
-        {profile?.avatar_url ? (
-          <Pressable
-            accessibilityRole="imagebutton"
-            accessibilityLabel={t('avatar')}
-            onPress={() => setAvatarOpen(true)}
-          >
-            <AppAvatar uri={profile.avatar_url} name={profile?.display_name} size={84} />
+
+      <View style={styles.body}>
+        <View style={styles.identityRow}>
+          <Pressable accessibilityRole="imagebutton" accessibilityLabel={t('avatar')} onPress={() => setAvatarOpen(true)}>
+            <ProfileAvatarRing uri={profile?.avatar_url} name={profile?.display_name} size={96} />
           </Pressable>
-        ) : (
-          <AppAvatar uri={profile?.avatar_url} name={profile?.display_name} size={84} />
-        )}
-        <Text style={{ color: colors.text, fontSize: 24, fontWeight: '700' }}>
-          {profile?.display_name} {profile?.verified ? '✓' : ''}
-        </Text>
-        <Text style={{ color: colors.textSecondary }}>@{profile?.username}</Text>
-        {profile?.bio ? <Text style={{ color: colors.text, lineHeight: 22 }}>{profile.bio}</Text> : null}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={t('changeLocation')}
-          onPress={() => {
-            useLocationPickStore.getState().begin('profile');
-            router.push({ pathname: '/prayer/location', params: { purpose: 'profile' } });
-          }}
-          style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
-        >
-          <Ionicons name="location-outline" size={18} color={colors.primary} />
-          <Text style={{ color: colors.text, fontWeight: '600', flex: 1 }}>
-            {[profile?.city, profile?.country].filter(Boolean).join(', ') || t('chooseLocation')}
-          </Text>
-          <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
-        </Pressable>
-        <View style={{ flexDirection: 'row', gap: 18 }}>
-          <Text style={{ color: colors.text }}>
-            <Text style={{ fontWeight: '800' }}>{stats.data?.posts ?? 0}</Text> {t('postCountLabel')}
-          </Text>
-          <Text style={{ color: colors.primary }} onPress={() => router.push({ pathname: '/profile/follows', params: { mode: 'followers' } })}>
-            <Text style={{ fontWeight: '800' }}>{stats.data?.followers ?? 0}</Text> {t('followers')}
-          </Text>
-          <Text style={{ color: colors.primary }} onPress={() => router.push({ pathname: '/profile/follows', params: { mode: 'following' } })}>
-            <Text style={{ fontWeight: '800' }}>{stats.data?.following ?? 0}</Text> {t('followingCount')}
-          </Text>
+          <ProfileActionButton
+            icon="create-outline"
+            label={t('editProfile')}
+            variant="secondary"
+            onPress={() => router.push('/profile/edit')}
+            style={styles.editAction}
+          />
         </View>
-        <AppTabs
+
+        <View style={styles.nameBlock}>
+          <View style={styles.nameRow}>
+            <Text style={[styles.name, { color: colors.text }]} numberOfLines={2}>
+              {profile?.display_name || profile?.username || '—'}
+            </Text>
+            {profile?.verified ? <Ionicons name="shield-checkmark" size={18} color={colors.primary} /> : null}
+            <MembershipTick userId={profile?.id} size={19} />
+          </View>
+          <Text style={[styles.handle, { color: colors.textSecondary }]}>@{profile?.username || '—'}</Text>
+          {profile?.bio ? (
+            <Text style={[styles.bio, { color: colors.text }]} numberOfLines={4}>
+              {profile.bio}
+            </Text>
+          ) : null}
+          <View style={styles.chips}>
+            <ProfileChip
+              icon="location-outline"
+              label={placeLabel}
+              onPress={() => setLocationOpen(true)}
+              accessibilityLabel={t('changeLocation')}
+            />
+          </View>
+        </View>
+
+        <ProfileStatCard
+          items={[
+            { key: 'posts', value: stats.data?.posts ?? 0, label: t('postCountLabel') },
+            {
+              key: 'followers',
+              value: stats.data?.followers ?? 0,
+              label: t('followers'),
+              onPress: () => router.push({ pathname: '/profile/follows', params: { mode: 'followers' } }),
+            },
+            {
+              key: 'following',
+              value: stats.data?.following ?? 0,
+              label: t('followingCount'),
+              onPress: () => router.push({ pathname: '/profile/follows', params: { mode: 'following' } }),
+            },
+          ]}
+        />
+
+        <ProfileSegmentedTabs
           value={tab}
           onChange={setTab}
           tabs={[
-            { key: 'posts', label: t('posts') },
-            { key: 'videos', label: t('videos') },
-            { key: 'voices', label: t('studioVoicesTab') },
+            { key: 'posts', label: t('posts'), icon: 'grid-outline' },
+            { key: 'videos', label: t('videos'), icon: 'play-circle-outline' },
+            { key: 'voices', label: t('studioVoicesTab'), icon: 'mic-outline' },
           ]}
         />
+
         {tab === 'voices' ? (
-          <View style={{ gap: 10 }}>
-            <Pressable
-              onPress={openStudioLibrary}
-              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 40 }}
-            >
-              <Text style={{ color: colors.primary, fontWeight: '700' }}>{t('studioLibrary')}</Text>
+          <View style={[styles.voiceCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Pressable onPress={openStudioLibrary} style={styles.voiceLibrary}>
+              <View style={[styles.voiceIcon, { backgroundColor: colors.primaryMuted }]}>
+                <Ionicons name="albums-outline" size={16} color={colors.primary} />
+              </View>
+              <Text style={{ color: colors.text, fontWeight: '700', flex: 1 }}>{t('studioLibrary')}</Text>
               <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
             </Pressable>
             {studio.isLoading ? null : !(studio.data?.length ?? 0) ? (
-              <Text style={{ color: colors.textSecondary }}>{t('studioLibraryEmpty')}</Text>
+              <Text style={[styles.muted, { color: colors.textSecondary }]}>{t('studioLibraryEmpty')}</Text>
             ) : (
-              (studio.data ?? []).map((item) => (
+              (studio.data ?? []).map((item, index) => (
                 <Pressable
                   key={item.id}
                   onPress={() => openStudioDetail(item.id)}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 10,
-                    minHeight: 52,
-                    borderBottomWidth: StyleSheet.hairlineWidth,
-                    borderBottomColor: colors.border,
-                    paddingVertical: 8,
-                  }}
+                  style={[
+                    styles.voiceRow,
+                    index > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.divider },
+                  ]}
                 >
-                  <Ionicons name="musical-notes" size={20} color={colors.primary} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: colors.text, fontWeight: '700' }} numberOfLines={1}>
+                  <View style={[styles.voiceIcon, { backgroundColor: colors.primaryMuted }]}>
+                    <Ionicons name="musical-notes" size={16} color={colors.primary} />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={{ color: colors.text, fontWeight: '700', fontSize: 14 }} numberOfLines={1}>
                       {item.title}
                     </Text>
-                    <Text style={{ color: colors.textSecondary, fontSize: 12 }}>
+                    <Text style={{ color: colors.textSecondary, fontSize: 11.5 }}>
                       {item.unique_listeners} · {Math.round(item.duration_seconds)}s
                     </Text>
                   </View>
+                  <Ionicons name="play-circle" size={24} color={colors.primary} />
                 </Pressable>
               ))
             )}
           </View>
         ) : posts.isLoading ? null : visiblePosts.length === 0 ? (
-          <Text style={{ color: colors.textSecondary }}>{t('emptyTab')}</Text>
+          <View style={[styles.empty, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View style={[styles.emptyIcon, { backgroundColor: colors.primaryMuted }]}>
+              <Ionicons name={tab === 'videos' ? 'videocam-outline' : 'images-outline'} size={26} color={colors.primary} />
+            </View>
+            <Text style={{ color: colors.text, fontWeight: '800', fontSize: 15 }}>{t('emptyTab')}</Text>
+            <Pressable
+              onPress={() => router.push('/post/create')}
+              style={({ pressed }) => [styles.emptyCta, { backgroundColor: colors.primaryMuted, opacity: pressed ? 0.8 : 1 }]}
+            >
+              <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
+              <Text style={{ color: colors.primary, fontWeight: '800', fontSize: 13 }}>{t('newPost')}</Text>
+            </Pressable>
+          </View>
         ) : (
           <View style={styles.gridBleed}>
             <ProfilePostGrid
@@ -230,19 +254,57 @@ function ProfileBody() {
           </View>
         )}
       </View>
+
+      <ProfileLocationPicker
+        visible={locationOpen}
+        initialCountryCode="TR"
+        initialCountryName={profile?.country ?? undefined}
+        onClose={() => setLocationOpen(false)}
+        onSelect={applyLocation}
+      />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  gridBleed: { marginHorizontal: -16 },
-  menuBtn: {
-    position: 'absolute',
-    end: 12,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  topBar: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingBottom: 8,
   },
+  topBarSpacer: { flex: 1 },
+  body: { paddingHorizontal: spacing.lg, marginTop: -46, gap: 14, paddingBottom: 8 },
+  identityRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 12 },
+  editAction: { marginBottom: 6 },
+  nameBlock: { gap: 5 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  name: { fontSize: 25, fontWeight: '800', letterSpacing: -0.6, flexShrink: 1 },
+  handle: { fontSize: 13.5, fontWeight: '600' },
+  bio: { fontSize: 14.5, lineHeight: 21, marginTop: 2 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 6 },
+  gridBleed: { marginHorizontal: -spacing.lg },
+  muted: { fontSize: 13, padding: 14 },
+  empty: {
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 30,
+    paddingHorizontal: 18,
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  emptyIcon: { width: 56, height: 56, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  emptyCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    marginTop: 2,
+  },
+  voiceCard: { borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
+  voiceLibrary: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, minHeight: 52 },
+  voiceRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 11 },
+  voiceIcon: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
 });

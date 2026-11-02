@@ -2,12 +2,19 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ProfilePostGrid } from '@/components/profile/ProfilePostGrid';
+import {
+  ProfileActionButton,
+  ProfileAvatarRing,
+  ProfileChip,
+  ProfileCover,
+  ProfileIconButton,
+  ProfileStatCard,
+} from '@/components/profile/ProfileKit';
+import { MembershipTick } from '@/components/membership/MembershipTick';
 import { Screen } from '@/components/layout/Screen';
-import { AppAvatar } from '@/components/ui/AppAvatar';
 import { AppBottomSheet } from '@/components/ui/AppBottomSheet';
 import { AppButton } from '@/components/ui/AppButton';
 import { ImageLightbox } from '@/components/ui/ImageLightbox';
@@ -19,6 +26,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { useReportSheetStore } from '@/stores/reportSheetStore';
 import { useToastStore } from '@/stores/toastStore';
 import { useTheme } from '@/theme/ThemeProvider';
+import { spacing } from '@/theme/tokens';
 
 type VisitProfile = {
   id: string;
@@ -36,7 +44,7 @@ type VisitProfile = {
 
 export default function UserScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { colors, name } = useTheme();
+  const { colors } = useTheme();
   const t = useT();
   const locale = useI18nStore((state) => state.locale);
   const rtl = isRtlLocale(locale);
@@ -46,6 +54,7 @@ export default function UserScreen() {
   const insets = useSafeAreaInsets();
   const [menu, setMenu] = useState(false);
   const [coverOpen, setCoverOpen] = useState(false);
+  const [avatarOpen, setAvatarOpen] = useState(false);
   const mine = Boolean(me && id && me === id);
   const profile = useQuery({
     queryKey: ['user', id],
@@ -65,7 +74,8 @@ export default function UserScreen() {
     enabled: Boolean(me && id && !mine),
     queryFn: async () => {
       const { data } = await requireSupabase().from('follows').select('status').eq('follower_id', me).eq('following_id', id).maybeSingle();
-      return data?.status as string | undefined;
+      // React Query forbids undefined — use null when there is no follow row.
+      return (data?.status as string | null | undefined) ?? null;
     },
   });
   const stats = useQuery({
@@ -118,108 +128,126 @@ export default function UserScreen() {
 
   const following = follow.data === 'accepted';
   const pending = follow.data === 'pending';
+  const initial = (person?.display_name ?? person?.username ?? '?').trim().charAt(0).toUpperCase();
 
   return (
     <Screen scroll padded={false} bleedTop back={false}>
-      <View style={[styles.cover, { height: 168 + insets.top, backgroundColor: colors.primaryDark }]}>
-        {person?.cover_url ? (
-          <Pressable
-            accessibilityRole="imagebutton"
-            accessibilityLabel={t('cover')}
-            onPress={() => setCoverOpen(true)}
-            style={StyleSheet.absoluteFillObject}
-          >
-            <Image source={{ uri: person.cover_url }} style={StyleSheet.absoluteFill} contentFit="cover" contentPosition="top" />
-          </Pressable>
-        ) : null}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={t('back')}
-          onPress={() => router.back()}
-          style={[styles.float, { top: insets.top + 8, start: 12, backgroundColor: name === 'dark' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.86)' }]}
-        >
-          <Ionicons name={rtl ? 'chevron-forward' : 'chevron-back'} size={22} color={colors.text} />
-        </Pressable>
-        {mine ? null : (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t('moreActions')}
-            onPress={() => setMenu(true)}
-            style={[styles.float, { top: insets.top + 8, end: 12, backgroundColor: name === 'dark' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.86)' }]}
-          >
-            <Ionicons name="ellipsis-horizontal" size={20} color={colors.text} />
-          </Pressable>
-        )}
-      </View>
-      <ImageLightbox uri={person?.cover_url} visible={coverOpen} onClose={() => setCoverOpen(false)} />
+      <ProfileCover
+        uri={person?.cover_url}
+        initial={initial}
+        height={236 + insets.top}
+        onPress={() => setCoverOpen(true)}
+        accessibilityLabel={t('cover')}
+      >
+        <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+          <ProfileIconButton
+            icon={rtl ? 'chevron-forward' : 'chevron-back'}
+            label={t('back')}
+            onPress={() => router.back()}
+          />
+          <View style={styles.topBarSpacer} />
+          {mine ? null : (
+            <ProfileIconButton icon="ellipsis-horizontal" label={t('moreActions')} onPress={() => setMenu(true)} />
+          )}
+        </View>
+      </ProfileCover>
+      <ImageLightbox uri={person?.cover_url} visible={coverOpen} onClose={() => setCoverOpen(false)} accessibilityLabel={t('cover')} />
+      <ImageLightbox uri={person?.avatar_url} visible={avatarOpen} onClose={() => setAvatarOpen(false)} accessibilityLabel={t('avatar')} />
+
       <View style={styles.body}>
-        <View style={styles.identity}>
-          <View style={[styles.avatarRing, { borderColor: colors.background }]}>
-            <AppAvatar uri={person?.avatar_url} name={person?.display_name} size={84} />
-          </View>
+        <View style={styles.identityRow}>
+          <Pressable accessibilityRole="imagebutton" accessibilityLabel={t('avatar')} onPress={() => setAvatarOpen(true)}>
+            <ProfileAvatarRing uri={person?.avatar_url} name={person?.display_name} size={96} />
+          </Pressable>
           {mine ? (
-            <Pressable accessibilityRole="button" onPress={() => router.push('/profile/edit')} style={[styles.follow, { borderColor: colors.border }]}>
-              <Text style={{ color: colors.text, fontWeight: '700' }}>{t('editProfile')}</Text>
-            </Pressable>
+            <ProfileActionButton
+              icon="create-outline"
+              label={t('editProfile')}
+              variant="secondary"
+              onPress={() => router.push('/profile/edit')}
+              style={styles.identityAction}
+            />
           ) : (
             <View style={styles.actions}>
-              <Pressable accessibilityRole="button" accessibilityLabel={t('sendMessage')} onPress={() => void message()} style={[styles.iconAction, { borderColor: colors.border }]}>
-                <Ionicons name="mail-outline" size={18} color={colors.text} />
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
+              <ProfileIconButton icon="mail-outline" label={t('sendMessage')} onPress={() => void message()} variant="surface" />
+              <ProfileActionButton
+                icon={pending ? 'hourglass-outline' : following ? 'checkmark' : 'person-add-outline'}
+                label={pending ? t('followRequested') : following ? t('unfollow') : t('follow')}
+                variant={following || pending ? 'secondary' : 'primary'}
                 onPress={() => void toggleFollow()}
-                style={[styles.follow, { backgroundColor: following || pending ? 'transparent' : colors.text, borderColor: following || pending ? colors.border : colors.text }]}
-              >
-                <Text style={{ color: following || pending ? colors.text : colors.background, fontWeight: '700' }}>
-                  {pending ? t('followRequested') : following ? t('unfollow') : t('follow')}
-                </Text>
-              </Pressable>
+                style={styles.identityAction}
+              />
             </View>
           )}
         </View>
-        <Text style={[styles.name, { color: colors.text }]}>{person?.display_name}{person?.verified ? ' ✓' : ''}</Text>
-        <Text style={{ color: colors.textSecondary }}>@{person?.username}</Text>
-        {person?.bio ? <Text style={{ color: colors.text, lineHeight: 22 }}>{person.bio}</Text> : null}
-        <View style={styles.meta}>
-          {place ? (
-            <View style={styles.metaItem}>
-              <Ionicons name="location-outline" size={15} color={colors.textSecondary} />
-              <Text style={{ color: colors.textSecondary }}>{place}</Text>
-            </View>
+
+        <View style={styles.nameBlock}>
+          <View style={styles.nameRow}>
+            <Text style={[styles.name, { color: colors.text }]} numberOfLines={2}>
+              {person?.display_name || person?.username || '—'}
+            </Text>
+            {person?.verified ? <Ionicons name="shield-checkmark" size={18} color={colors.primary} /> : null}
+            <MembershipTick userId={person?.id} size={19} />
+          </View>
+          <Text style={[styles.handle, { color: colors.textSecondary }]}>@{person?.username || '—'}</Text>
+          {person?.bio ? (
+            <Text style={[styles.bio, { color: colors.text }]} numberOfLines={5}>
+              {person.bio}
+            </Text>
           ) : null}
-          {joined ? (
-            <View style={styles.metaItem}>
-              <Ionicons name="calendar-outline" size={15} color={colors.textSecondary} />
-              <Text style={{ color: colors.textSecondary }}>{t('joinedOn', { date: joined })}</Text>
+          {place || joined ? (
+            <View style={styles.chips}>
+              {place ? <ProfileChip icon="location-outline" label={place} /> : null}
+              {joined ? <ProfileChip icon="calendar-outline" label={t('joinedOn', { date: joined })} /> : null}
             </View>
           ) : null}
         </View>
-        <View style={styles.stats}>
-          <Text style={{ color: colors.text }} onPress={() => openFollows('following')}>
-            <Text style={styles.count}>{stats.data?.following ?? 0}</Text> {t('followingCount')}
-          </Text>
-          <Text style={{ color: colors.text }} onPress={() => openFollows('followers')}>
-            <Text style={styles.count}>{stats.data?.followers ?? 0}</Text> {t('followers')}
-          </Text>
+
+        <ProfileStatCard
+          items={[
+            { key: 'posts', value: stats.data?.posts ?? 0, label: t('postCountLabel') },
+            {
+              key: 'followers',
+              value: stats.data?.followers ?? 0,
+              label: t('followers'),
+              onPress: () => openFollows('followers'),
+            },
+            {
+              key: 'following',
+              value: stats.data?.following ?? 0,
+              label: t('followingCount'),
+              onPress: () => openFollows('following'),
+            },
+          ]}
+        />
+
+        <View style={styles.postsHead}>
+          <Text style={[styles.postsTitle, { color: colors.text }]}>{t('posts')}</Text>
+          <View style={[styles.postsLine, { backgroundColor: colors.primary }]} />
         </View>
-        <Text style={[styles.section, { color: colors.text, borderBottomColor: colors.primary }]}>{t('posts')}</Text>
+
         {locked ? (
-          <View style={styles.locked}>
-            <Ionicons name="lock-closed-outline" size={28} color={colors.textSecondary} />
-            <Text style={{ color: colors.text, fontWeight: '700' }}>{t('privateAccount')}</Text>
-            <Text style={{ color: colors.textSecondary, textAlign: 'center', lineHeight: 20 }}>{t('privatePosts')}</Text>
+          <View style={[styles.lockedCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View style={[styles.lockedIcon, { backgroundColor: colors.primaryMuted }]}>
+              <Ionicons name="lock-closed-outline" size={24} color={colors.primary} />
+            </View>
+            <Text style={{ color: colors.text, fontWeight: '800', fontSize: 15 }}>{t('privateAccount')}</Text>
+            <Text style={{ color: colors.textSecondary, textAlign: 'center', lineHeight: 20, fontSize: 13 }}>{t('privatePosts')}</Text>
+          </View>
+        ) : posts.isLoading ? null : (posts.data ?? []).length === 0 ? (
+          <View style={[styles.lockedCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View style={[styles.lockedIcon, { backgroundColor: colors.primaryMuted }]}>
+              <Ionicons name="images-outline" size={24} color={colors.primary} />
+            </View>
+            <Text style={{ color: colors.textSecondary, fontSize: 13 }}>{t('emptyTab')}</Text>
           </View>
         ) : (
-          posts.isLoading ? null : (posts.data ?? []).length === 0 ? (
-            <Text style={{ color: colors.textSecondary }}>{t('emptyTab')}</Text>
-          ) : (
-            <View style={styles.gridBleed}>
-              <ProfilePostGrid posts={posts.data ?? []} />
-            </View>
-          )
+          <View style={styles.gridBleed}>
+            <ProfilePostGrid posts={posts.data ?? []} />
+          </View>
         )}
       </View>
+
       <AppBottomSheet visible={menu} title={person?.display_name || t('moreActions')} onClose={() => setMenu(false)}>
         <AppButton
           label={t('reportAction')}
@@ -260,20 +288,29 @@ export default function UserScreen() {
 }
 
 const styles = StyleSheet.create({
-  cover: { width: '100%' },
-  float: { position: 'absolute', width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  body: { paddingHorizontal: 16, paddingBottom: 28, gap: 8 },
-  identity: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
-  avatarRing: { marginTop: -42, borderWidth: 4, borderRadius: 999 },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
-  iconAction: { width: 36, height: 36, borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
-  follow: { minHeight: 36, paddingHorizontal: 16, borderRadius: 999, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  name: { fontSize: 22, fontWeight: '800', marginTop: 4 },
-  meta: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  stats: { flexDirection: 'row', gap: 16, marginTop: 4 },
-  count: { fontWeight: '800' },
-  section: { marginTop: 8, paddingBottom: 10, borderBottomWidth: 2, alignSelf: 'flex-start', fontWeight: '700' },
-  gridBleed: { marginHorizontal: -16 },
-  locked: { alignItems: 'center', gap: 8, paddingVertical: 28, paddingHorizontal: 12 },
+  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingBottom: 8, gap: 8 },
+  topBarSpacer: { flex: 1 },
+  body: { paddingHorizontal: spacing.lg, marginTop: -46, gap: 14, paddingBottom: 28 },
+  identityRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 10 },
+  identityAction: { marginBottom: 6 },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
+  nameBlock: { gap: 5 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  name: { fontSize: 25, fontWeight: '800', letterSpacing: -0.6, flexShrink: 1 },
+  handle: { fontSize: 13.5, fontWeight: '600' },
+  bio: { fontSize: 14.5, lineHeight: 21, marginTop: 2 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 6 },
+  postsHead: { gap: 8, marginTop: 2 },
+  postsTitle: { fontSize: 15, fontWeight: '800', letterSpacing: -0.2 },
+  postsLine: { height: 2, width: 36, borderRadius: 2 },
+  gridBleed: { marginHorizontal: -spacing.lg },
+  lockedCard: {
+    alignItems: 'center',
+    gap: 9,
+    paddingVertical: 28,
+    paddingHorizontal: 18,
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  lockedIcon: { width: 54, height: 54, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
 });
